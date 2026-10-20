@@ -125,6 +125,7 @@ struct Expr {
   int id;               // E_FN: unique number for the generated C function
   Decl *method;         // E_CALL: resolved impl method, if any
   SemTyVec type_args;   // E_CALL: bound generic arguments of a generic fn / method, in declaration order
+  TypeVec explicit_types; // E_FIELD callee: type arguments written at the call, e.g. json.decode<User>(s)
   int call_kind;        // E_CALL: see CallKind
 };
 
@@ -137,6 +138,7 @@ typedef enum {
   CK_STATIC,    // Int.parse, Float.from, String.from
   CK_VARIANT,   // Enum.Variant(fields)
   CK_PRELUDE,   // Some / Ok / Err / assert / assert_eq / panic
+  CK_MODULE,    // std module function: json.encode, http.serve, ...
 } CallKind;
 
 typedef enum { S_LET, S_ASSIGN, S_EXPR, S_RETURN, S_BREAK, S_CONTINUE, S_FOR, S_WHILE } StmtKind;
@@ -179,6 +181,7 @@ struct Decl {
   StrVec path;          // import path segments
   Expr *value;          // const
   struct Ty *ty;        // fn: function type; const: value type (checker)
+  bool from_std;        // declared by a std module (std.http Request / Response, std.json JsonError)
 };
 
 typedef struct {

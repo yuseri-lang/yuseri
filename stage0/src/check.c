@@ -1,6 +1,15 @@
 #include "check.h"
 
+#include "lexer.h"
+#include "parser.h"
 #include "types.h"
+
+// Declarations that `import std.json` / `import std.http` bring into the module.
+static const char *STD_JSON_SRC =
+    "enum JsonError { Syntax(at: Int), Shape(path: String, expected: String) }\n";
+static const char *STD_HTTP_SRC =
+    "struct Request { id: String, method: String, path: String, query: Map<String, String>, headers: Map<String, String>, body: String }\n"
+    "struct Response { status: Int, headers: Map<String, String>, body: String }\n";
 
 // ---- context -----------------------------------------------------------
 
@@ -43,6 +52,7 @@ typedef struct {
 #define ERR(c, id, line, ...) diag_error(id, (c)->file, line, __VA_ARGS__)
 
 static Ty *infer(C *c, Expr *e, Ty *expected);
+static bool json_able(C *c, Ty *t);
 static Ty *check_expr(C *c, Expr *e, Ty *expected);
 static Ty *check_block(C *c, Block *b, Ty *expected);
 static void check_stmt(C *c, Stmt *s);
@@ -969,8 +979,56 @@ static Ty *infer_call(C *c, Expr *e, Ty *expected) {
       return et;
     }
     if (is_type_name(c, tn)) { ERR(c, "E-NAME-01", e->line, "no function %s on type %s", cstr(c, fnm), cstr(c, tn)); return ty_prim(TY_ERR); }
-    for (int i = 0; i < c->modules.len; i++)
-      if (str_eq(c->modules.items[i], tn)) { ERR(c, "E-NAME-01", e->line, "module %s has no %s in Stage 0", cstr(c, tn), cstr(c, fnm)); for (int j = 0; j < e->args.len; j++) infer(c, e->args.items[j], NULL); return ty_prim(TY_ERR); }
+    bool is_module = false;
+    for (int i = 0; i < c->modules.len; i++) if (str_eq(c->modules.items[i], tn)) is_module = true;
+    if (is_module) {
+      e->call_kind = CK_MODULE;
+      if (str_eq_c(tn, "json")) {
+        Decl *jd = find_decl(&c->enums, STR_LIT("JsonError"));
+        Ty *jerr = ty_named(a, TY_ENUM, STR_LIT("JsonError"), jd);
+        if (str_eq_c(fnm, "encode")) {
+          check_arg_count(c, e, 1, "json.encode");
+          Ty *vt = arg_or_err(c, e, 0, NULL);
+          if (!json_able(c, vt)) ERR(c, "E-JSON-01", e->line, "cannot convert %s to JSON", tstr(c, vt));
+          return ty_prim(TY_STRING);
+        }
+        if (str_eq_c(fnm, "decode")) {
+          if (f->explicit_types.len != 1) { ERR(c, "E-TYPE-06", e->line, "json.decode needs one type argument: json.decode<T>(s)"); for (int j = 0; j < e->args.len; j++) infer(c, e->args.items[j], NULL); return ty_prim(TY_ERR); }
+          Ty *T = resolve_type(c, f->explicit_types.items[0]);
+          if (!json_able(c, T)) ERR(c, "E-JSON-01", e->line, "cannot convert JSON to %s", tstr(c, T));
+          check_arg_count(c, e, 1, "json.decode");
+          arg_or_err(c, e, 0, ty_prim(TY_STRING));
+          VEC_PUSH(a, &e->type_args, T);
+          return ty_result(a, T, jerr);
+        }
+      }
+      if (str_eq_c(tn, "http")) {
+        Decl *rq = find_decl(&c->structs, STR_LIT("Request")), *rs = find_decl(&c->structs, STR_LIT("Response"));
+        Ty *req = ty_named(a, TY_STRUCT, STR_LIT("Request"), rq), *res = ty_named(a, TY_STRUCT, STR_LIT("Response"), rs);
+        if (str_eq_c(fnm, "serve")) {
+          check_arg_count(c, e, 2, "http.serve");
+          arg_or_err(c, e, 0, ty_prim(TY_INT));
+          TyVec ps = {0};
+          VEC_PUSH(a, &ps, req);
+          arg_or_err(c, e, 1, ty_fn(a, ps, res));
+          return ty_prim(TY_UNIT);
+        }
+        if (str_eq_c(fnm, "response") || str_eq_c(fnm, "json")) {
+          check_arg_count(c, e, 2, str_eq_c(fnm, "json") ? "http.json" : "http.response");
+          arg_or_err(c, e, 0, ty_prim(TY_INT));
+          arg_or_err(c, e, 1, ty_prim(TY_STRING));
+          return res;
+        }
+        if (str_eq_c(fnm, "request")) {
+          check_arg_count(c, e, 3, "http.request");
+          for (int j = 0; j < 3; j++) arg_or_err(c, e, j, ty_prim(TY_STRING));
+          return req;
+        }
+      }
+      ERR(c, "E-NAME-01", e->line, "module %s has no function %s", cstr(c, tn), cstr(c, fnm));
+      for (int j = 0; j < e->args.len; j++) infer(c, e->args.items[j], NULL);
+      return ty_prim(TY_ERR);
+    }
     // falls through to a method call on an unknown name (reported there)
   }
   // 3. value.method(...)
@@ -1149,9 +1207,51 @@ static void check_type_decl(C *c, Decl *d) {
   c->generics = saved;
 }
 
+// Parses std declarations and puts them in front of the module's own declarations.
+static void inject_std(Arena *a, Module *m) {
+  DeclVec injected = {0};
+  for (int i = 0; i < m->decls.len; i++) {
+    Decl *d = m->decls.items[i];
+    if (d->kind != D_IMPORT || d->path.len != 2 || !str_eq_c(d->path.items[0], "std")) continue;
+    const char *src = NULL, *file = NULL;
+    if (str_eq_c(d->path.items[1], "json")) { src = STD_JSON_SRC; file = "std/json.yu"; }
+    if (str_eq_c(d->path.items[1], "http")) { src = STD_HTTP_SRC; file = "std/http.yu"; }
+    if (!src) continue;
+    LexResult lx = lex(a, file, str_cstr(src));
+    Module *sm = parse_module(a, file, lx);
+    for (int j = 0; j < sm->decls.len; j++) {
+      sm->decls.items[j]->from_std = true;
+      sm->decls.items[j]->line = d->line;
+      VEC_PUSH(a, &injected, sm->decls.items[j]);
+    }
+  }
+  if (!injected.len) return;
+  for (int i = 0; i < m->decls.len; i++) VEC_PUSH(a, &injected, m->decls.items[i]);
+  m->decls = injected;
+}
+
+// True for types std.json can encode and decode.
+static bool json_able(C *c, Ty *t) {
+  switch (t->kind) {
+    case TY_INT: case TY_FLOAT: case TY_BOOL: case TY_STRING: case TY_ERR: return true;
+    case TY_LIST: case TY_OPTION: return json_able(c, t->a);
+    case TY_MAP: return t->a->kind == TY_STRING && json_able(c, t->b);
+    case TY_STRUCT:
+      if (!t->decl) return false;
+      for (int i = 0; i < t->decl->params.len; i++) if (!json_able(c, struct_field(c, t, t->decl->params.items[i].name))) return false;
+      return true;
+    case TY_ENUM:
+      if (!t->decl) return false;
+      for (int i = 0; i < t->decl->variants.len; i++) if (t->decl->variants.items[i].fields.len) return false;
+      return true;
+    default: return false;
+  }
+}
+
 void check_module(Arena *a, Module *m) {
   C ctx = {.a = a, .file = m->file, .m = m};
   C *c = &ctx;
+  inject_std(a, m);
   // pass 1: collect top-level names
   for (int i = 0; i < m->decls.len; i++) {
     Decl *d = m->decls.items[i];

@@ -1,0 +1,44 @@
+// std.http: handlers are plain functions, tested with http.request
+import std.http
+import std.json
+
+struct Echo { message: String }
+
+fn handle(req: Request) -> Response {
+  match "{req.method} {req.path}" {
+    "GET /health" => http.response(200, "ok")
+    "GET /greet" => http.response(200, "hi {req.query.get("name").unwrap_or("stranger")}")
+    "POST /echo" => match json.decode<Echo>(req.body) {
+      Ok(e) => http.json(200, json.encode(e))
+      Err(err) => http.json(400, "\{\"error\":\"{err}\"\}")
+    }
+    _ => http.response(404, "not found")
+  }
+}
+
+fn main() -> Unit { http.serve(8080, handle) }
+
+test "routes" {
+  let h = handle(http.request("get", "/health", ""))
+  assert_eq(h.status, 200)
+  assert_eq(h.body, "ok")
+  assert_eq(h.headers.get("content-type"), Some("text/plain; charset=utf-8"))
+  let r = handle(http.request("POST", "/echo", "\{\"message\":\"hi\"\}"))
+  assert_eq(r.status, 200)
+  assert_eq(r.body, "\{\"message\":\"hi\"\}")
+  assert_eq(r.headers.get("content-type"), Some("application/json"))
+  let bad = handle(http.request("POST", "/echo", "\{\"message\":1\}"))
+  assert_eq(bad.status, 400)
+  assert(bad.body.starts_with("\{\"error\":\"JsonError.Shape(path: "))
+  assert_eq(handle(http.request("GET", "/nope", "")).status, 404)
+}
+
+test "query strings and request ids" {
+  let req = http.request("GET", "/greet?name=A%20B&x=1", "")
+  assert_eq(req.path, "/greet")
+  assert_eq(req.query.get("name"), Some("A B"))
+  assert_eq(req.query.get("x"), Some("1"))
+  assert_eq(req.id, "test")
+  assert_eq(handle(req).body, "hi A B")
+  assert_eq(handle(http.request("GET", "/greet", "")).body, "hi stranger")
+}

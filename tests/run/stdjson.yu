@@ -1,0 +1,47 @@
+// std.json: encode and decode through every supported shape
+import std.json
+
+struct Point { x: Int, y: Int }
+
+struct Profile { name: String, age: Int, tags: List<String>, nick: Option<String>, scores: Map<String, Float>, role: Role, home: Point }
+
+enum Role { Admin, Guest }
+
+fn move_right(body: String) -> Result<String, JsonError> {
+  let p = json.decode<Point>(body)?
+  Ok(json.encode(Point { ..p, x: p.x + 1 }))
+}
+
+test "round trip" {
+  assert_eq(move_right("\{\"x\":1,\"y\":2\}"), Ok("\{\"x\":2,\"y\":2\}"))
+  assert_eq(move_right("\{\"x\":1\}"), Err(JsonError.Shape(path: "y", expected: "Int")))
+  assert_eq(move_right("\{x"), Err(JsonError.Syntax(at: 1)))
+  assert_eq(move_right("\{\"x\":1.5,\"y\":2\}"), Err(JsonError.Shape(path: "x", expected: "Int")))
+  assert_eq(move_right("\{\"x\":-1,\"y\":2,\"extra\":true\}"), Ok("\{\"x\":0,\"y\":2\}"))
+}
+
+test "every shape" {
+  let text = "\{\"name\":\"A \\\"q\\\"\",\"age\":30,\"tags\":[\"a\",\"b\"],\"nick\":null,\"scores\":\{\"m\":1.5\},\"role\":\"Admin\",\"home\":\{\"x\":1,\"y\":2\}\}"
+  match json.decode<Profile>(text) {
+    Ok(p) => {
+      assert_eq(p.name, "A \"q\"")
+      assert_eq(p.tags, ["a", "b"])
+      assert_eq(p.nick, None)
+      assert_eq(p.scores.get("m"), Some(1.5))
+      assert_eq(p.role, Role.Admin)
+      assert_eq(json.encode(p), "\{\"name\":\"A \\\"q\\\"\",\"age\":30,\"tags\":[\"a\",\"b\"],\"nick\":null,\"scores\":\{\"m\":1.5\},\"role\":\"Admin\",\"home\":\{\"x\":1,\"y\":2\}\}")
+    }
+    Err(e) => panic("unexpected {e}")
+  }
+  assert_eq(json.decode<List<Int>>("[1,2,\"x\"]"), Err(JsonError.Shape(path: "[2]", expected: "Int")))
+  assert_eq(json.decode<Profile>("\{\"name\":\"n\",\"age\":1,\"tags\":[],\"scores\":\{\},\"role\":\"Nobody\",\"home\":\{\"x\":0,\"y\":0\}\}"), Err(JsonError.Shape(path: "role", expected: "Role")))
+  assert_eq(json.encode([Some(1), None]), "[1,null]")
+  assert_eq(json.encode("tab\there"), "\"tab\\there\"")
+}
+
+test "decode errors carry a trace" {
+  match json.decode<Point>("nope") {
+    Ok(_) => assert(false)
+    Err(e) => assert_eq(e.trace().len(), 2)
+  }
+}

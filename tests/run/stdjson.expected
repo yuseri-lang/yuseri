@@ -1,0 +1,4 @@
+ok   round trip
+ok   every shape
+ok   decode errors carry a trace
+3 tests, 0 failed

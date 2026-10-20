@@ -23,6 +23,15 @@ typedef struct { void (*fn)(void); void *env; } yu_closure;     // cast to the t
 // ---- memory
 void *yu_alloc(size_t n);
 void yu_arena_reset(void);
+typedef struct { void *chunk; size_t used; } yu_arena_mark;
+yu_arena_mark yu_arena_mark_now(void);        // everything allocated after the mark...
+void yu_arena_release(yu_arena_mark m);       // ...is freed here (request = arena)
+
+// ---- catching failures: yu_fail unwinds to the innermost active catch
+#define yu_catch_begin() (yu_catch_push(), setjmp(*yu_catch_buf()) == 0)
+void yu_catch_push(void);
+jmp_buf *yu_catch_buf(void);
+void yu_catch_end(void);
 
 // ---- failures: prints "<ID> <loc> <message>; <hint>" then unwinds to the test harness or exits
 void yu_fail(const char *id, const char *loc, const char *fmt, ...) __attribute__((noreturn, format(printf, 3, 4)));
@@ -94,5 +103,8 @@ void yu_assert_eq_fail(const char *loc, yu_str left, yu_str right) __attribute__
 int yu_test_run(const char *name, void (*fn)(void));
 int yu_test_summary(void);
 void yu_init(void);
+
+#include "yu_http.h"
+#include "yu_json.h"
 
 #endif

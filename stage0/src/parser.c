@@ -378,6 +378,15 @@ static Expr *parse_postfix(P *p) {
       Expr *f = new_expr(p, E_FIELD, t->line);
       f->a = e;
       f->text = ident(p);
+      if (at(p, T_LT) && looks_like_type_args(p)) {  // json.decode<User>(s)
+        advance(p);
+        while (!at(p, T_GT) && !at(p, T_EOF)) {
+          Type *ty = parse_type(p);
+          VEC_PUSH(p->a, &f->explicit_types, ty);
+          if (!accept(p, T_COMMA)) break;
+        }
+        expect(p, T_GT, "`>`");
+      }
       e = f;
     } else if (t->kind == T_LPAREN) {
       advance(p);

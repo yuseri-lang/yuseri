@@ -22,7 +22,7 @@ Yuseri is a statically typed language for backend services, designed to be writt
 4. No implicit conversion, no inheritance, no operator overloading, no macros.
 5. Bindings are immutable; `var` only when you assign, `push`, or `set`.
 6. There is one way to write each thing. Do not invent syntax; if `core.md` lacks it, you do not need it.
-7. Put a `test` block next to every function you write and make it pass.
+7. Put a `test` block next to every function you write (except `main`) and make it pass.
 8. Run `yuseri fmt` before showing code; never hand-format.
 9. On an error, read the entry for its id in `errors.md`, apply the fix hint, and re-run. Do not guess.
 10. Use `panic` only for states that cannot happen. Expected failures are `Err` values.

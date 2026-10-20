@@ -221,6 +221,8 @@ static void emit_type(G *g, Ty *t) {
       if (seen(&g->emitted_types, n)) return;
       if (!t->decl) return;
       mark(g, &g->emitted_types, n);  // mark first: a field may mention this struct inside a List
+      if (t->decl->from_std && str_eq_c(t->name, "Request")) { buf_puts(&g->types, "typedef yu_http_request yu_S_Request;\n"); return; }
+      if (t->decl->from_std && str_eq_c(t->name, "Response")) { buf_puts(&g->types, "typedef yu_http_response yu_S_Response;\n"); return; }
       Buf b = {0};
       buf_printf(&b, "typedef struct {");
       for (int i = 0; i < t->decl->params.len; i++) {
@@ -1235,10 +1237,164 @@ static const char *mangle_binds(G *g, TyVec *binds) {
   return r;
 }
 
+// JSON encoder per type: appends JSON text for a value to a builder.
+static const char *jenc_fn(G *g, Ty *t) {
+  t = sub(g, t);
+  const char *n = sfmt(g, "yu_jenc_%s", mangle(g, t));
+  if (seen(&g->fmt_done, n)) return n;
+  mark(g, &g->fmt_done, n);
+  const char *ct = ctype(g, t);
+  buf_printf(&g->protos, "static void %s(yu_sb *b, %s v);\n", n, ct);
+  Buf b = {0};
+  buf_printf(&b, "static void %s(yu_sb *b, %s v) {\n", n, ct);
+  switch (t->kind) {
+    case TY_INT: buf_puts(&b, "  yu_sb_int(b, v);\n"); break;
+    case TY_FLOAT: buf_puts(&b, "  yu_sb_float(b, v);\n"); break;
+    case TY_BOOL: buf_puts(&b, "  yu_sb_bool(b, v);\n"); break;
+    case TY_STRING: buf_puts(&b, "  yu_json_quote(b, v);\n"); break;
+    case TY_OPTION: buf_printf(&b, "  if (v.some) %s(b, v.val); else yu_sb_cstr(b, \"null\");\n", jenc_fn(g, t->a)); break;
+    case TY_LIST:
+      buf_printf(&b, "  yu_sb_cstr(b, \"[\");\n  for (int64_t i = 0; i < v.len; i++) { if (i) yu_sb_cstr(b, \",\"); %s(b, ((%s *)v.p)[i]); }\n  yu_sb_cstr(b, \"]\");\n", jenc_fn(g, t->a), ctype(g, t->a));
+      break;
+    case TY_MAP:
+      buf_printf(&b, "  yu_sb_cstr(b, \"{\");\n  for (int64_t i = 0; i < v.keys.len; i++) { if (i) yu_sb_cstr(b, \",\"); yu_json_quote(b, ((yu_str *)v.keys.p)[i]); yu_sb_cstr(b, \":\"); %s(b, ((%s *)v.vals.p)[i]); }\n  yu_sb_cstr(b, \"}\");\n", jenc_fn(g, t->b), ctype(g, t->b));
+      break;
+    case TY_STRUCT: {
+      buf_puts(&b, "  yu_sb_cstr(b, \"{\");\n");
+      for (int i = 0; i < t->decl->params.len; i++) {
+        Ty *ft = field_ty(g, t, &t->decl->params.items[i]);
+        const char *fn = cs(g, t->decl->params.items[i].name);
+        buf_printf(&b, "  yu_sb_cstr(b, \"%s\\\"%s\\\":\"); %s(b, v.f_%s);\n", i ? "," : "", fn, jenc_fn(g, ft), fn);
+      }
+      buf_puts(&b, "  yu_sb_cstr(b, \"}\");\n");
+      break;
+    }
+    case TY_ENUM:
+      for (int i = 0; i < t->decl->variants.len; i++)
+        buf_printf(&b, "  if (v.tag == %d) { yu_sb_cstr(b, \"\\\"%s\\\"\"); return; }\n", i, cs(g, t->decl->variants.items[i].name));
+      break;
+    default: buf_puts(&b, "  (void)v; yu_sb_cstr(b, \"null\");\n"); break;
+  }
+  buf_puts(&b, "}\n");
+  buf_puts(&g->helpers, b.p);
+  buf_free(&b);
+  return n;
+}
+
+// JSON decoder per type: fills *out from a parsed node; on a shape error fills err and returns false.
+static const char *jdec_fn(G *g, Ty *t) {
+  t = sub(g, t);
+  const char *n = sfmt(g, "yu_jdec_%s", mangle(g, t));
+  if (seen(&g->copy_done, n)) return n;
+  mark(g, &g->copy_done, n);
+  const char *ct = ctype(g, t);
+  buf_printf(&g->protos, "static bool %s(yu_jv *v, %s *out, yu_sb *path, yu_json_err *err);\n", n, ct);
+  Buf b = {0};
+  buf_printf(&b, "static bool %s(yu_jv *v, %s *out, yu_sb *path, yu_json_err *err) {\n", n, ct);
+  const char *tname = ty_str(g->a, t);
+  const char *fail = sfmt(g, "{ err->path = yu_sb_finish(path); err->expected = \"%s\"; return false; }", tname);
+  switch (t->kind) {
+    case TY_INT: buf_printf(&b, "  if (!yu_jv_int(v, out)) %s\n  return true;\n", fail); break;
+    case TY_FLOAT: buf_printf(&b, "  if (!yu_jv_float(v, out)) %s\n  return true;\n", fail); break;
+    case TY_BOOL: buf_printf(&b, "  if (!v || v->kind != YU_JV_BOOL) %s\n  *out = v->b;\n  return true;\n", fail); break;
+    case TY_STRING: buf_printf(&b, "  if (!v || v->kind != YU_JV_STRING) %s\n  *out = v->text;\n  return true;\n", fail); break;
+    case TY_OPTION:
+      buf_printf(&b, "  if (!v || v->kind == YU_JV_NULL) { out->some = false; return true; }\n  out->some = true;\n  return %s(v, &out->val, path, err);\n", jdec_fn(g, t->a));
+      break;
+    case TY_LIST: {
+      const char *et = ctype(g, t->a);
+      buf_printf(&b, "  if (!v || v->kind != YU_JV_ARRAY) %s\n  *out = yu_list_new(sizeof(%s));\n  for (int64_t i = 0; i < v->items.len; i++) {\n    %s e;\n    int64_t save = path->len;\n    yu_json_path_push(path, NULL, i);\n    if (!%s(((yu_jv **)v->items.p)[i], &e, path, err)) return false;\n    path->len = save;\n    yu_list_push(out, &e, sizeof(%s));\n  }\n  return true;\n", fail, et, et, jdec_fn(g, t->a), et);
+      break;
+    }
+    case TY_MAP: {
+      const char *vt = ctype(g, t->b);
+      buf_printf(&b, "  if (!v || v->kind != YU_JV_OBJECT) %s\n  *out = yu_map_new(1, sizeof(%s));\n  for (int64_t i = 0; i < v->items.len; i++) {\n    yu_jkv *kv = &((yu_jkv *)v->items.p)[i];\n    %s val;\n    int64_t save = path->len;\n    if (path->len) yu_sb_cstr(path, \".\");\n    yu_sb_str(path, kv->key);\n    if (!%s(kv->val, &val, path, err)) return false;\n    path->len = save;\n    yu_map_set(out, &kv->key, &val, sizeof(%s));\n  }\n  return true;\n", fail, vt, vt, jdec_fn(g, t->b), vt);
+      break;
+    }
+    case TY_STRUCT: {
+      buf_printf(&b, "  if (!v || v->kind != YU_JV_OBJECT) %s\n", fail);
+      for (int i = 0; i < t->decl->params.len; i++) {
+        Ty *ft = field_ty(g, t, &t->decl->params.items[i]);
+        const char *fn = cs(g, t->decl->params.items[i].name);
+        buf_printf(&b, "  { int64_t save = path->len; yu_json_path_push(path, \"%s\", 0);\n    if (!%s(yu_jv_get(v, yu_str_lit(\"%s\", %d)), &out->f_%s, path, err)) return false;\n    path->len = save; }\n", fn, jdec_fn(g, ft), fn, (int)strlen(fn), fn);
+      }
+      buf_puts(&b, "  return true;\n");
+      break;
+    }
+    case TY_ENUM: {
+      buf_printf(&b, "  if (!v || v->kind != YU_JV_STRING) %s\n", fail);
+      for (int i = 0; i < t->decl->variants.len; i++) {
+        const char *vn = cs(g, t->decl->variants.items[i].name);
+        buf_printf(&b, "  if (yu_str_eq(v->text, yu_str_lit(\"%s\", %d))) { out->tag = %d; return true; }\n", vn, (int)strlen(vn), i);
+      }
+      buf_printf(&b, "  %s\n", fail);
+      break;
+    }
+    default: buf_printf(&b, "  (void)v; (void)out; %s\n", fail); break;
+  }
+  buf_puts(&b, "}\n");
+  buf_puts(&g->helpers, b.p);
+  buf_free(&b);
+  return n;
+}
+
+static const char *gen_module_call(G *g, Expr *e) {
+  Expr *f = e->a;
+  Str mod = f->a->text, fnm = f->text;
+  Ty *t = sub(g, e->ty);
+  if (str_eq_c(mod, "http")) {
+    if (str_eq_c(fnm, "serve")) {
+      const char *port = gen_expr(g, e->args.items[0]);
+      const char *h = gen_temp(g, e->args.items[1]);
+      const char *hh = newtmp(g);
+      emit(g, "yu_http_handler %s; memcpy(&%s, &%s, sizeof %s);", hh, hh, h, hh);
+      emit(g, "yu_http_serve(%s, %s);", port, hh);
+      return "YU_UNIT";
+    }
+    if (str_eq_c(fnm, "response")) { const char *a0 = gen_expr(g, e->args.items[0]); const char *a1 = gen_expr(g, e->args.items[1]); return sfmt(g, "yu_http_response_text(%s, %s)", a0, a1); }
+    if (str_eq_c(fnm, "json")) { const char *a0 = gen_expr(g, e->args.items[0]); const char *a1 = gen_expr(g, e->args.items[1]); return sfmt(g, "yu_http_json(%s, %s)", a0, a1); }
+    if (str_eq_c(fnm, "request")) { const char *a0 = gen_expr(g, e->args.items[0]); const char *a1 = gen_expr(g, e->args.items[1]); const char *a2 = gen_expr(g, e->args.items[2]); return sfmt(g, "yu_http_request_make(%s, %s, %s)", a0, a1, a2); }
+  }
+  if (str_eq_c(mod, "json")) {
+    if (str_eq_c(fnm, "encode")) {
+      Expr *x = e->args.items[0];
+      const char *v = gen_expr(g, x);
+      const char *sb = newtmp(g);
+      emit(g, "yu_sb %s = {0};", sb);
+      emit(g, "%s(&%s, %s);", jenc_fn(g, x->ty), sb, v);
+      return sfmt(g, "yu_sb_finish(&%s)", sb);
+    }
+    if (str_eq_c(fnm, "decode")) {
+      Ty *T = sub(g, (Ty *)e->type_args.items[0]);
+      const char *s = gen_expr(g, e->args.items[0]);
+      const char *r = newtmp(g), *root = newtmp(g), *at = newtmp(g);
+      const char *jt = ctype(g, t->b);
+      emit(g, "%s %s = {0};", ctype(g, t), r);
+      emit(g, "yu_jv *%s = NULL; int64_t %s = 0;", root, at);
+      emit(g, "if (!yu_json_parse(%s, &%s, &%s)) {", s, root, at);
+      g->indent++;
+      emit(g, "%s e_ = { .tag = 0 }; e_.u.v_Syntax.f_at = %s; yu_trace_add(&e_.trace_, %s);", jt, at, loc(g, e->line));
+      emit(g, "%s.ok = false; %s.err = e_;", r, r);
+      g->indent--;
+      emit(g, "} else {");
+      g->indent++;
+      emit(g, "%s out_ = {0}; yu_sb path_ = {0}; yu_json_err err_ = {0};", ctype(g, T));
+      emit(g, "if (%s(%s, &out_, &path_, &err_)) { %s.ok = true; %s.val = out_; }", jdec_fn(g, T), root, r, r);
+      emit(g, "else { %s e_ = { .tag = 1 }; e_.u.v_Shape.f_path = err_.path; e_.u.v_Shape.f_expected = yu_str_lit(err_.expected, (int64_t)strlen(err_.expected)); yu_trace_add(&e_.trace_, %s); %s.ok = false; %s.err = e_; }", jt, loc(g, e->line), r, r);
+      g->indent--;
+      emit(g, "}");
+      return r;
+    }
+  }
+  emit(g, "/* unsupported module call */");
+  return "YU_UNIT";
+}
+
 static const char *gen_call(G *g, Expr *e) {
   Expr *f = e->a;
   Ty *t = sub(g, e->ty);
   switch (e->call_kind) {
+    case CK_MODULE: return gen_module_call(g, e);
     case CK_PRELUDE: {
       Str n = f->text;
       if (str_eq_c(n, "Some")) return sfmt(g, "(%s){ .some = true, .val = %s }", ctype(g, t), gen_value(g, e->args.items[0]));

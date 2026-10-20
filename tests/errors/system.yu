@@ -1,0 +1,10 @@
+// E-CAP-01 and the shape of main
+struct Holder { clock: Clock }
+
+fn bad_store(c: Clock) -> Store<Clock> { Store.new(c) }
+
+fn bad_holder(c: Clock) -> Store<Holder> { Store.new(Holder { clock: c }) }
+
+fn bad_compare(a: Clock, b: Clock) -> Bool { a == b }
+
+fn main(port: Int) -> Unit { let _ = port }

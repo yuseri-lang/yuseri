@@ -207,7 +207,8 @@ int yu_http_read_request(int fd, yu_http_request *req) {
   return 0;
 }
 
-void yu_http_serve(int64_t port, yu_http_handler h) {
+void yu_http_serve(void *net, int64_t port, yu_http_handler h) {
+  (void)net;  // the capability is proof of permission; nothing to read from it yet
   signal(SIGPIPE, SIG_IGN);
   int s = socket(AF_INET, SOCK_STREAM, 0);
   if (s < 0) yu_fail("R-HTTP-01", "std.http", "cannot create a socket");

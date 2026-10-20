@@ -42,7 +42,7 @@ bool ty_eq(Ty *x, Ty *y) {
       if (x->params.len != y->params.len) return false;
       for (int i = 0; i < x->params.len; i++) if (!ty_eq(x->params.items[i], y->params.items[i])) return false;
       return ty_eq(x->ret, y->ret);
-    case TY_PARAM: return str_eq(x->name, y->name);
+    case TY_PARAM: case TY_CAP: return str_eq(x->name, y->name);
     default: return true;
   }
 }
@@ -78,7 +78,7 @@ void ty_print(Buf *b, Ty *t) {
       buf_puts(b, ") -> ");
       ty_print(b, t->ret);
       break;
-    case TY_PARAM: buf_str(b, t->name); break;
+    case TY_PARAM: case TY_CAP: buf_str(b, t->name); break;
   }
 }
 

@@ -15,7 +15,8 @@ typedef struct { yu_http_handler_fn fn; void *env; } yu_http_handler;
 #define YU_HTTP_MAX_HEADER (64 * 1024)
 #define YU_HTTP_MAX_BODY (1024 * 1024)
 
-void yu_http_serve(int64_t port, yu_http_handler h);
+struct yu_net_tag;
+void yu_http_serve(void *net, int64_t port, yu_http_handler h);  // net: the Net capability
 // Reads one request from a socket; exposed for tests. 0 = ok, else the status to answer.
 int yu_http_read_request(int fd, yu_http_request *req);
 yu_http_response yu_http_response_text(int64_t status, yu_str body);

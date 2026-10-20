@@ -17,6 +17,7 @@ typedef enum {
   TY_FN,      // params, ret
   TY_PARAM,   // generic parameter named `name`
   TY_STORE,   // a = value type (layer 2 Store<T>)
+  TY_CAP,     // capability named `name`: Net, Fs, Env, Clock, Random, Log, Tasks
   TY_ERR,     // unknown after an error: compatible with everything, never reported again
 } TyKind;
 

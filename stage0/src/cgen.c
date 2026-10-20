@@ -139,6 +139,7 @@ static const char *mangle(G *g, Ty *t) {
     case TY_RESULT: return sfmt(g, "Res_%s_%s_", mangle(g, t->a), mangle(g, t->b));
     case TY_ENTRY: return sfmt(g, "Ent_%s_%s_", mangle(g, t->a), mangle(g, t->b));
     case TY_STORE: return sfmt(g, "Store_%s_", mangle(g, t->a));
+    case TY_CAP: return sfmt(g, "Cap_%s", cs(g, t->name));
     case TY_STRUCT: case TY_ENUM: {
       Buf b = {0};
       buf_printf(&b, "S_%s", cs(g, t->name));
@@ -224,6 +225,7 @@ static void emit_type(G *g, Ty *t) {
       mark(g, &g->emitted_types, n);  // mark first: a field may mention this struct inside a List
       if (t->decl->from_std && str_eq_c(t->name, "Request")) { buf_puts(&g->types, "typedef yu_http_request yu_S_Request;\n"); return; }
       if (t->decl->from_std && str_eq_c(t->name, "Response")) { buf_puts(&g->types, "typedef yu_http_response yu_S_Response;\n"); return; }
+      if (t->decl->from_std && str_eq_c(t->name, "System")) { buf_puts(&g->types, "typedef yu_system yu_S_System;\n"); return; }
       Buf b = {0};
       buf_printf(&b, "typedef struct {");
       for (int i = 0; i < t->decl->params.len; i++) {
@@ -291,6 +293,15 @@ static const char *ctype(G *g, Ty *t) {
     case TY_LIST: return "yu_list";
     case TY_MAP: return "yu_map";
     case TY_STORE: emit_type(g, t->a); return "yu_store *";
+    case TY_CAP: {
+      if (str_eq_c(t->name, "Net")) return "yu_net *";
+      if (str_eq_c(t->name, "Clock")) return "yu_clock *";
+      if (str_eq_c(t->name, "Env")) return "yu_env *";
+      if (str_eq_c(t->name, "Log")) return "yu_log *";
+      if (str_eq_c(t->name, "Fs")) return "yu_fs *";
+      if (str_eq_c(t->name, "Random")) return "yu_random *";
+      return "yu_tasks *";
+    }
     default: emit_type(g, t); return sfmt(g, "yu_%s", mangle(g, t));
   }
 }
@@ -336,7 +347,7 @@ static const char *eq_fn(G *g, Ty *t) {
     case TY_INT: case TY_FLOAT: case TY_BOOL: buf_puts(&b, "  return a == b;\n"); break;
     case TY_STRING: buf_puts(&b, "  return yu_str_eq(a, b);\n"); break;
     case TY_BYTES: buf_puts(&b, "  return a.len == b.len && (a.len == 0 || memcmp(a.p, b.p, (size_t)a.len) == 0);\n"); break;
-    case TY_UNIT: case TY_NEVER: case TY_ERR: case TY_PARAM: case TY_FN: case TY_STORE: buf_puts(&b, "  (void)a; (void)b; return true;\n"); break;
+    case TY_UNIT: case TY_NEVER: case TY_ERR: case TY_PARAM: case TY_FN: case TY_STORE: case TY_CAP: buf_puts(&b, "  (void)a; (void)b; return true;\n"); break;
     case TY_LIST: {
       const char *et = ctype(g, t->a);
       buf_printf(&b, "  if (a.len != b.len) return false;\n  for (int64_t i = 0; i < a.len; i++) if (!%s(((%s *)a.p)[i], ((%s *)b.p)[i])) return false;\n  return true;\n", eq_fn(g, t->a), et, et);
@@ -405,6 +416,7 @@ static const char *fmt_fn(G *g, Ty *t) {
     case TY_UNIT: case TY_NEVER: case TY_ERR: case TY_PARAM: buf_puts(&b, "  (void)v; yu_sb_cstr(b, \"Unit\");\n"); break;
     case TY_FN: buf_puts(&b, "  (void)v; yu_sb_cstr(b, \"fn\");\n"); break;
     case TY_STORE: buf_puts(&b, "  (void)v; yu_sb_cstr(b, \"Store\");\n"); break;
+    case TY_CAP: buf_printf(&b, "  (void)v; yu_sb_cstr(b, \"%s\");\n", cs(g, t->name)); break;
     case TY_LIST:
       buf_printf(&b, "  yu_sb_cstr(b, \"[\");\n  for (int64_t i = 0; i < v.len; i++) { if (i) yu_sb_cstr(b, \", \"); %s(b, ((%s *)v.p)[i]); }\n  yu_sb_cstr(b, \"]\");\n", fmt_fn(g, t->a), ctype(g, t->a));
       break;
@@ -1198,6 +1210,23 @@ static const char *gen_builtin(G *g, Expr *e) {
     case TY_ENUM:
       if (IS("trace")) { const char *o = gen_temp(g, obj); return sfmt(g, "yu_list_copy(%s.trace_, sizeof(yu_str))", o); }
       break;
+    case TY_CAP: {
+      const char *cap = gen_temp(g, obj);
+      if (IS("now")) return sfmt(g, "yu_clock_now(%s)", cap);
+      if (IS("get")) {
+        const char *r = newtmp(g), *nm = gen_temp(g, e->args.items[0]);
+        emit(g, "%s %s = {false};", ctype(g, t), r);
+        emit(g, "%s.some = yu_env_get(%s, %s, &%s.val);", r, cap, nm, r);
+        return r;
+      }
+      if (IS("lines")) return sfmt(g, "yu_log_lines(%s)", cap);
+      if (IS("info") || IS("error")) {
+        const char *msg = gen_expr(g, e->args.items[0]);
+        emit(g, "yu_log_write(%s, \"%s\", %s);", cap, cs(g, name), msg);
+        return "YU_UNIT";
+      }
+      break;
+    }
     case TY_STORE: {
       Ty *T = rt->a;
       const char *st = gen_temp(g, obj);
@@ -1209,22 +1238,34 @@ static const char *gen_builtin(G *g, Expr *e) {
         else emit(g, "%s %s = *(%s *)%s->value;", tt, r, tt, st);
         return r;
       }
-      if (IS("set") || IS("update")) {
+      if (IS("set") || IS("update") || IS("try_update")) {
         const char *nv = newtmp(g);
+        const char *res = NULL;
         if (IS("set")) emit(g, "%s %s = %s;", tt, nv, gen_value(g, e->args.items[0]));
         else {
           const char *f = gen_temp(g, e->args.items[0]);
           const char *cur = newtmp(g);
           if (needs_copy(g, T)) emit(g, "%s %s = %s(*(%s *)%s->value);", tt, cur, copy_fn(g, T), tt, st);
           else emit(g, "%s %s = *(%s *)%s->value;", tt, cur, tt, st);
-          emit(g, "%s %s;", tt, nv);
-          emit(g, "if (yu_catch_begin()) { %s = %s.fn(%s.env, %s); yu_catch_end(); } else { yu_fail(\"R-STORE-01\", %s, \"update function panicked; value unchanged\"); }", nv, f, f, cur, loc(g, e->line));
+          if (IS("update")) {
+            emit(g, "%s %s;", tt, nv);
+            emit(g, "if (yu_catch_begin()) { %s = %s.fn(%s.env, %s); yu_catch_end(); } else { yu_fail(\"R-STORE-01\", %s, \"update function panicked; value unchanged\"); }", nv, f, f, cur, loc(g, e->line));
+          } else {
+            res = newtmp(g);
+            emit(g, "%s %s;", ctype(g, t), res);
+            emit(g, "if (yu_catch_begin()) { %s = %s.fn(%s.env, %s); yu_catch_end(); } else { yu_fail(\"R-STORE-01\", %s, \"update function panicked; value unchanged\"); }", res, f, f, cur, loc(g, e->line));
+            emit(g, "%s %s = %s.val;", tt, nv, res);
+            emit(g, "if (%s.ok) {", res);
+            g->indent++;
+          }
         }
         const char *prev = newtmp(g), *cp = newtmp(g);
         emit(g, "yu_arena *%s = yu_store_begin(%s);", prev, st);
         if (needs_copy(g, T)) emit(g, "%s %s = %s(%s);", tt, cp, copy_fn(g, T), nv);
         else emit(g, "%s %s = %s;", tt, cp, nv);
         emit(g, "yu_store_commit(%s, &%s, %s);", st, cp, prev);
+        if (IS("try_update")) { g->indent--; emit(g, "}"); return res; }
+        if (IS("update")) return nv;
         return "YU_UNIT";
       }
       break;
@@ -1379,11 +1420,12 @@ static const char *gen_module_call(G *g, Expr *e) {
   Ty *t = sub(g, e->ty);
   if (str_eq_c(mod, "http")) {
     if (str_eq_c(fnm, "serve")) {
-      const char *port = gen_expr(g, e->args.items[0]);
-      const char *h = gen_temp(g, e->args.items[1]);
+      const char *net = gen_expr(g, e->args.items[0]);
+      const char *port = gen_expr(g, e->args.items[1]);
+      const char *h = gen_temp(g, e->args.items[2]);
       const char *hh = newtmp(g);
       emit(g, "yu_http_handler %s; memcpy(&%s, &%s, sizeof %s);", hh, hh, h, hh);
-      emit(g, "yu_http_serve(%s, %s);", port, hh);
+      emit(g, "yu_http_serve(%s, %s, %s);", net, port, hh);
       return "YU_UNIT";
     }
     if (str_eq_c(fnm, "response")) { const char *a0 = gen_expr(g, e->args.items[0]); const char *a1 = gen_expr(g, e->args.items[1]); return sfmt(g, "yu_http_response_text(%s, %s)", a0, a1); }
@@ -1502,6 +1544,9 @@ static const char *gen_call(G *g, Expr *e) {
         emit(g, "%s.ok = yu_int_parse(%s, &%s.val);", r, gen_expr(g, e->args.items[0]), r);
         return r;
       }
+      if (str_eq_c(tn, "Clock")) return sfmt(g, "yu_clock_fixed(%s)", gen_expr(g, e->args.items[0]));
+      if (str_eq_c(tn, "Env")) return sfmt(g, "yu_env_of(%s)", gen_expr(g, e->args.items[0]));
+      if (str_eq_c(tn, "Log")) return "yu_log_capture()";
       if (str_eq_c(tn, "Store")) {
         Ty *T = t->a;
         const char *v = gen_value(g, e->args.items[0]);
@@ -1755,8 +1800,9 @@ void cgen_module(Arena *a, Module *m, bool tests, Buf *out) {
     buf_write(out, test_table.p ? test_table.p : "", test_table.len);
     buf_puts(out, "  return yu_test_summary();\n}\n");
   } else {
-    bool has_main = find_decl(&g->fns, STR_LIT("main")) != NULL;
-    if (has_main) buf_puts(out, "int main(void) {\n  yu_init();\n  (void)y_main();\n  return 0;\n}\n");
+    Decl *mainfn = find_decl(&g->fns, STR_LIT("main"));
+    if (mainfn && mainfn->params.len == 1) buf_puts(out, "int main(void) {\n  yu_init();\n  yu_system sys = yu_system_new();\n  (void)y_main(sys);\n  return 0;\n}\n");
+    else if (mainfn) buf_puts(out, "int main(void) {\n  yu_init();\n  (void)y_main();\n  return 0;\n}\n");
     else buf_puts(out, "int main(void) {\n  fprintf(stderr, \"yuseri: this module has no main; run its tests with `yuseri test`\\n\");\n  return 2;\n}\n");
   }
   buf_free(&consts);

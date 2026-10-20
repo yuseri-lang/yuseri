@@ -3,7 +3,7 @@
 Yuseri is a statically typed language for backend services. This file is the complete Core spec. If something is not here, do not write it. Layout rules are in `SKILL.md`.
 
 ## 1. Program
-One file = one module. Top-level declarations may appear in any order and refer to each other. An executable module has `fn main() -> Unit`; library and test modules have no `main`. Comments start with `//`. Keywords: `fn let var const if else for in while break continue return struct enum impl import pub match test true false`; anything else is free for names. A statement ends at the end of its line unless the line ends with `(`, `[`, `{`, `,`, a binary operator, or `=>`. The prelude (`Option`, `Result`, `List`, `Map`, `assert`, `panic`) needs no import.
+One file = one module. Top-level declarations may appear in any order and refer to each other. An executable module has `fn main() -> Unit`, or `fn main(sys: System) -> Unit` when it touches the outside world (runtime.md); library and test modules have no `main`. Comments start with `//`. Keywords: `fn let var const if else for in while break continue return struct enum impl import pub match test true false`; anything else is free for names. A statement ends at the end of its line unless the line ends with `(`, `[`, `{`, `,`, a binary operator, or `=>`. The prelude (`Option`, `Result`, `List`, `Map`, `assert`, `panic`) needs no import.
 
 ## 2. Modules
 `import std.json` brings module `json` into scope; call `json.parse(s)`. Only `pub` items (`pub fn`, `pub struct`, ...) are visible outside their module.

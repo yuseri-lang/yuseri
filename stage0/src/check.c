@@ -10,6 +10,8 @@ static const char *STD_JSON_SRC =
 static const char *STD_HTTP_SRC =
     "struct Request { id: String, method: String, path: String, query: Map<String, String>, headers: Map<String, String>, body: String }\n"
     "struct Response { status: Int, headers: Map<String, String>, body: String }\n";
+static const char *STD_SYSTEM_SRC =
+    "struct System { net: Net, fs: Fs, env: Env, clock: Clock, random: Random, log: Log, tasks: Tasks }\n";
 
 // ---- context -----------------------------------------------------------
 
@@ -150,8 +152,28 @@ static bool is_generic_name(C *c, Str name) {
   return false;
 }
 
+static const char *CAP_NAMES[] = {"Net", "Fs", "Env", "Clock", "Random", "Log", "Tasks"};
+static bool is_cap_name(Str n) {
+  for (size_t i = 0; i < sizeof CAP_NAMES / sizeof CAP_NAMES[0]; i++) if (str_eq_c(n, CAP_NAMES[i])) return true;
+  return false;
+}
+
+// True when a value of this type holds a capability somewhere inside.
+static bool contains_cap(Ty *t) {
+  switch (t->kind) {
+    case TY_CAP: return true;
+    case TY_LIST: case TY_OPTION: case TY_STORE: return contains_cap(t->a);
+    case TY_MAP: case TY_RESULT: case TY_ENTRY: return contains_cap(t->a) || contains_cap(t->b);
+    case TY_STRUCT:
+      if (!t->decl) return false;
+      for (int i = 0; i < t->decl->params.len; i++) if (t->decl->params.items[i].ty && contains_cap(t->decl->params.items[i].ty)) return true;
+      return false;
+    default: return false;
+  }
+}
+
 static bool is_type_name(C *c, Str n) {
-  static const char *builtins[] = {"Int", "Float", "Bool", "String", "Bytes", "Unit", "List", "Map", "Option", "Result", "ParseError", "Store"};
+  static const char *builtins[] = {"Int", "Float", "Bool", "String", "Bytes", "Unit", "List", "Map", "Option", "Result", "ParseError", "Store", "Net", "Fs", "Env", "Clock", "Random", "Log", "Tasks"};
   for (size_t i = 0; i < sizeof builtins / sizeof builtins[0]; i++) if (str_eq_c(n, builtins[i])) return true;
   return find_decl(&c->structs, n) || find_decl(&c->enums, n);
 }
@@ -183,10 +205,12 @@ static Ty *resolve_type(C *c, Type *t) {
   }
   if (str_eq_c(n, "Store")) {
     if (nargs != 1) { ERR(c, "E-TYPE-06", t->line, "Store takes 1 type argument"); return ty_prim(TY_ERR); }
-    if (!storable(c, a0)) ERR(c, "E-STORE-01", t->line, "%s cannot live in a Store", tstr(c, a0));
+    if (contains_cap(a0)) ERR(c, "E-CAP-01", t->line, "%s holds a capability and cannot live in a Store", tstr(c, a0));
+    else if (!storable(c, a0)) ERR(c, "E-STORE-01", t->line, "%s cannot live in a Store", tstr(c, a0));
     return ty_store(c->a, a0);
   }
   if (str_eq_c(n, "ParseError")) return ty_named(c->a, TY_ENUM, n, NULL);
+  if (is_cap_name(n)) { if (nargs) ERR(c, "E-TYPE-06", t->line, "%s takes no type arguments", cstr(c, n)); return ty_named(c->a, TY_CAP, n, NULL); }
   if (is_generic_name(c, n)) return ty_param(c->a, n);
   Decl *d = find_decl(&c->structs, n);
   TyKind k = TY_STRUCT;
@@ -389,6 +413,15 @@ static Ty *builtin_method(C *c, Ty *recv, Str name, Expr *call, Ty *expected, bo
       if (method_is(name, "trace")) { check_arg_count(c, call, 0, "trace"); result = ty_list(a, STRING); }
       else *found = false;
       break;
+    case TY_CAP: {
+      bool is_clock = str_eq_c(recv->name, "Clock"), is_env = str_eq_c(recv->name, "Env"), is_log = str_eq_c(recv->name, "Log");
+      if (is_clock && method_is(name, "now")) { check_arg_count(c, call, 0, "now"); result = INT; }
+      else if (is_env && method_is(name, "get")) { check_arg_count(c, call, 1, "get"); arg_or_err(c, call, 0, STRING); result = ty_option(a, STRING); }
+      else if (is_log && (method_is(name, "info") || method_is(name, "error"))) { check_arg_count(c, call, 1, cstr(c, name)); arg_or_err(c, call, 0, STRING); result = UNIT; }
+      else if (is_log && method_is(name, "lines")) { check_arg_count(c, call, 0, "lines"); result = ty_list(a, STRING); }
+      else *found = false;
+      break;
+    }
     case TY_STORE: {
       Ty *T = recv->a;
       if (method_is(name, "get")) { check_arg_count(c, call, 0, "get"); result = T; }
@@ -398,7 +431,17 @@ static Ty *builtin_method(C *c, Ty *recv, Str name, Expr *call, Ty *expected, bo
         TyVec ps = {0};
         VEC_PUSH(a, &ps, T);
         arg_or_err(c, call, 0, ty_fn(a, ps, T));
-        result = UNIT;
+        result = T;
+      } else if (method_is(name, "try_update")) {
+        // f: fn(T) -> Result<T, E>; the Err leaves the value unchanged and is returned
+        check_arg_count(c, call, 1, "try_update");
+        Ty *ft = call->args.len ? infer(c, call->args.items[0], NULL) : ty_prim(TY_ERR);
+        result = ty_prim(TY_ERR);
+        if (!ty_is_err(ft)) {
+          bool shape = ft->kind == TY_FN && ft->params.len == 1 && ty_eq(ft->params.items[0], T) && ft->ret->kind == TY_RESULT && ty_eq(ft->ret->a, T);
+          if (!shape) ERR(c, "E-TYPE-01", call->line, "try_update needs fn(%s) -> Result<%s, E>, got %s", tstr(c, T), tstr(c, T), tstr(c, ft));
+          else result = ft->ret;
+        }
       } else *found = false;
       break;
     }
@@ -607,7 +650,8 @@ static Ty *infer_binary(C *c, Expr *e) {
   Ty *r = infer(c, e->b, is_contextual(e->b) ? l : NULL);
   if (ty_is_err(l) || ty_is_err(r)) return (op == T_EQ || op == T_NE || op == T_LT || op == T_LE || op == T_GT || op == T_GE) ? ty_prim(TY_BOOL) : ty_prim(TY_ERR);
   if (op == T_EQ || op == T_NE) {
-    if (l->kind == TY_STORE || l->kind == TY_FN) ERR(c, "E-TYPE-01", e->line, "%s cannot be compared; compare the value from get() instead", tstr(c, l));
+    if (l->kind == TY_CAP) ERR(c, "E-CAP-01", e->line, "%s is a capability and cannot be compared", tstr(c, l));
+    else if (l->kind == TY_STORE || l->kind == TY_FN) ERR(c, "E-TYPE-01", e->line, "%s cannot be compared; compare the value from get() instead", tstr(c, l));
     else if (!ty_eq(l, r)) ERR(c, "E-TYPE-01", e->line, "cannot compare %s with %s", tstr(c, l), tstr(c, r));
     return ty_prim(TY_BOOL);
   }
@@ -954,10 +998,14 @@ static Ty *infer_call(C *c, Expr *e, Ty *expected) {
     e->call_kind = CK_STATIC;
     if (str_eq_c(tn, "Int") && str_eq_c(fnm, "parse")) { check_arg_count(c, e, 1, "Int.parse"); arg_or_err(c, e, 0, ty_prim(TY_STRING)); return ty_result(a, ty_prim(TY_INT), ty_named(a, TY_ENUM, STR_LIT("ParseError"), NULL)); }
     if (str_eq_c(tn, "Float") && str_eq_c(fnm, "from")) { check_arg_count(c, e, 1, "Float.from"); arg_or_err(c, e, 0, ty_prim(TY_INT)); return ty_prim(TY_FLOAT); }
+    if (str_eq_c(tn, "Clock") && str_eq_c(fnm, "fixed")) { check_arg_count(c, e, 1, "Clock.fixed"); arg_or_err(c, e, 0, ty_prim(TY_INT)); return ty_named(a, TY_CAP, STR_LIT("Clock"), NULL); }
+    if (str_eq_c(tn, "Env") && str_eq_c(fnm, "of")) { check_arg_count(c, e, 1, "Env.of"); arg_or_err(c, e, 0, ty_map(a, ty_prim(TY_STRING), ty_prim(TY_STRING))); return ty_named(a, TY_CAP, STR_LIT("Env"), NULL); }
+    if (str_eq_c(tn, "Log") && str_eq_c(fnm, "capture")) { check_arg_count(c, e, 0, "Log.capture"); return ty_named(a, TY_CAP, STR_LIT("Log"), NULL); }
     if (str_eq_c(tn, "Store") && str_eq_c(fnm, "new")) {
       check_arg_count(c, e, 1, "Store.new");
       Ty *vt = arg_or_err(c, e, 0, expected && expected->kind == TY_STORE ? expected->a : NULL);
-      if (!storable(c, vt)) ERR(c, "E-STORE-01", e->line, "%s cannot live in a Store", tstr(c, vt));
+      if (contains_cap(vt)) ERR(c, "E-CAP-01", e->line, "%s holds a capability and cannot live in a Store", tstr(c, vt));
+      else if (!storable(c, vt)) ERR(c, "E-STORE-01", e->line, "%s cannot live in a Store", tstr(c, vt));
       return ty_store(a, vt);
     }
     if (str_eq_c(tn, "String") && str_eq_c(fnm, "from")) {
@@ -1033,11 +1081,12 @@ static Ty *infer_call(C *c, Expr *e, Ty *expected) {
         Decl *rq = find_decl(&c->structs, STR_LIT("Request")), *rs = find_decl(&c->structs, STR_LIT("Response"));
         Ty *req = ty_named(a, TY_STRUCT, STR_LIT("Request"), rq), *res = ty_named(a, TY_STRUCT, STR_LIT("Response"), rs);
         if (str_eq_c(fnm, "serve")) {
-          check_arg_count(c, e, 2, "http.serve");
-          arg_or_err(c, e, 0, ty_prim(TY_INT));
+          check_arg_count(c, e, 3, "http.serve");
+          arg_or_err(c, e, 0, ty_named(a, TY_CAP, STR_LIT("Net"), NULL));
+          arg_or_err(c, e, 1, ty_prim(TY_INT));
           TyVec ps = {0};
           VEC_PUSH(a, &ps, req);
-          arg_or_err(c, e, 1, ty_fn(a, ps, res));
+          arg_or_err(c, e, 2, ty_fn(a, ps, res));
           return ty_prim(TY_UNIT);
         }
         if (str_eq_c(fnm, "response") || str_eq_c(fnm, "json")) {
@@ -1187,6 +1236,11 @@ static void check_fn_body(C *c, Decl *d, Ty *self_type) {
   StrVec *saved = c->generics;
   c->generics = &d->generics;
   if (!d->ret) ERR(c, "E-TYPE-03", d->line, "missing return type on fn %s", cstr(c, d->name));
+  if (!self_type && str_eq_c(d->name, "main")) {
+    bool ok_params = d->params.len == 0 || (d->params.len == 1 && d->params.items[0].type && d->params.items[0].type->kind == TYPE_NAMED && str_eq_c(d->params.items[0].type->name, "System"));
+    if (!ok_params) ERR(c, "E-TYPE-06", d->line, "main takes no parameters or one parameter sys: System");
+    if (d->ret && !(d->ret->kind == TYPE_NAMED && str_eq_c(d->ret->name, "Unit"))) ERR(c, "E-TYPE-06", d->line, "main returns Unit");
+  }
   Ty *ret = d->ret ? resolve_type(c, d->ret) : ty_prim(TY_ERR);
   FnCtx fx = {.ret = ret, .name = d->name, .depth = 0, .outer = NULL};
   c->fn = &fx;
@@ -1237,6 +1291,11 @@ static void check_type_decl(C *c, Decl *d) {
 // Parses std declarations and puts them in front of the module's own declarations.
 static void inject_std(Arena *a, Module *m) {
   DeclVec injected = {0};
+  {  // System is always available (runtime.md 3)
+    LexResult lx = lex(a, "std/system.yu", str_cstr(STD_SYSTEM_SRC));
+    Module *sm = parse_module(a, "std/system.yu", lx);
+    for (int j = 0; j < sm->decls.len; j++) { sm->decls.items[j]->from_std = true; sm->decls.items[j]->line = 1; VEC_PUSH(a, &injected, sm->decls.items[j]); }
+  }
   for (int i = 0; i < m->decls.len; i++) {
     Decl *d = m->decls.items[i];
     if (d->kind != D_IMPORT || d->path.len != 2 || !str_eq_c(d->path.items[0], "std")) continue;
@@ -1252,7 +1311,6 @@ static void inject_std(Arena *a, Module *m) {
       VEC_PUSH(a, &injected, sm->decls.items[j]);
     }
   }
-  if (!injected.len) return;
   for (int i = 0; i < m->decls.len; i++) VEC_PUSH(a, &injected, m->decls.items[i]);
   m->decls = injected;
 }

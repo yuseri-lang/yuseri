@@ -16,7 +16,7 @@ fn handle(req: Request) -> Response {
   }
 }
 
-fn main() -> Unit { http.serve(8080, handle) }
+fn main(sys: System) -> Unit { http.serve(sys.net, 8080, handle) }
 
 test "routes" {
   let h = handle(http.request("get", "/health", ""))

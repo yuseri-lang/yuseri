@@ -89,7 +89,7 @@ Every error is one line: `<ID> <file>:<line> <message>; <fix hint>`. When a decl
 
 ## R-TIME: deadlines
 
-- **R-TIME-01** the request passed its deadline (30 seconds unless `http.serve_with` sets another). The client gets `500` and the request's memory is freed. Fix: make the handler faster, or give `http.serve_with` a longer deadline.
+- **R-TIME-01** request <method> <path> exceeded its deadline (30 seconds unless `http.serve_with` sets another). The client gets `500` and the request's memory is freed. The line names the request, not a source position: reproduce that request in a `test` to find the loop. Fix: find the loop or call that never ends for this request; a longer deadline (`http.serve_with`) only helps when the work is legitimately slow.
 
 ## R-TASK: spawned tasks
 

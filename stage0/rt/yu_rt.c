@@ -171,7 +171,7 @@ void yu_deadline_check(void) {
   if (!g_deadline_at || yu_now_ms() <= g_deadline_at) return;
   int64_t len = g_deadline_len;
   g_deadline_at = 0;  // the failure path itself allocates; it must not fail again
-  yu_fail("R-TIME-01", "std.http", "request exceeded its %lld ms deadline", (long long)len);
+  yu_fail("R-TIME-01", "std.http", "request %.*s exceeded its %lld ms deadline", (int)yu_request_line.len, (const char *)yu_request_line.p, (long long)len);
 }
 
 // ---- failures -------------------------------------------------------------
@@ -512,6 +512,7 @@ yu_list yu_map_entries(yu_map m, int64_t vsz, int64_t voff, int64_t esz) {
 _Thread_local yu_str yu_request_id = {(const uint8_t *)"main", 4};
 _Thread_local bool yu_serving = false;
 _Thread_local const char *yu_task_loc = NULL;
+_Thread_local yu_str yu_request_line = {(const uint8_t *)"", 0};
 
 // Copies the list first: enum values are copied by value, and two copies must never
 // write into the same buffer (a trace must show only the path this value took).

@@ -110,6 +110,7 @@ static const char *reason(int64_t status) {
     case 404: return "Not Found";
     case 405: return "Method Not Allowed";
     case 409: return "Conflict";
+    case 413: return "Payload Too Large";
     case 500: return "Internal Server Error";
     default: return "Status";
   }
@@ -143,18 +144,19 @@ static void send_response(int fd, yu_http_response r) {
   write_all(fd, out.p, out.len);
 }
 
-// Reads one request. Returns false when the connection is not a usable request.
-static bool read_request(int fd, yu_http_request *req) {
+// Reads one request. Returns 0 when `req` is usable, or the status to answer with:
+// 400 for a malformed or incomplete request, 413 for one that is too large.
+int yu_http_read_request(int fd, yu_http_request *req) {
   yu_sb raw = {0};
   uint8_t buf[8192];
   int64_t header_end = -1;
   while (header_end < 0) {
     ssize_t n = read(fd, buf, sizeof buf);
-    if (n <= 0) return false;
+    if (n <= 0) return 400;
     yu_sb_str(&raw, (yu_str){buf, n});
     for (int64_t i = 3; i < raw.len; i++)
       if (raw.p[i - 3] == '\r' && raw.p[i - 2] == '\n' && raw.p[i - 1] == '\r' && raw.p[i] == '\n') { header_end = i + 1; break; }
-    if (raw.len > 1024 * 1024) return false;
+    if (raw.len > YU_HTTP_MAX_HEADER) return 413;
   }
   yu_str head = {raw.p, header_end};
   // request line
@@ -164,7 +166,7 @@ static bool read_request(int fd, yu_http_request *req) {
     else if (head.p[i] == ' ' && sp2 < 0) sp2 = i;
     else if (head.p[i] == '\r') { eol = i; break; }
   }
-  if (sp1 < 0 || sp2 < 0 || eol < 0) return false;
+  if (sp1 < 0 || sp2 < 0 || eol < 0) return 400;
   *req = (yu_http_request){0};
   req->f_method = upper((yu_str){head.p, sp1});
   split_target((yu_str){head.p + sp1 + 1, sp2 - sp1 - 1}, &req->f_path, &req->f_query);
@@ -182,7 +184,15 @@ static bool read_request(int fd, yu_http_request *req) {
       yu_str name = lower((yu_str){line.p, colon});
       yu_str value = yu_str_trim((yu_str){line.p + colon + 1, line.len - colon - 1});
       map_set(&req->f_headers, name, dup_str(value));
-      if (yu_str_eq(name, yu_str_lit("content-length", 14))) { int64_t v; if (yu_int_parse(value, &v)) content_length = v; }
+      if (yu_str_eq(name, yu_str_lit("content-length", 14))) {
+        // digits only, no sign: a negative or malformed length is a bad request
+        if (value.len == 0 || value.len > 18) return 400;
+        for (int64_t k = 0; k < value.len; k++) if (value.p[k] < '0' || value.p[k] > '9') return 400;
+        int64_t v;
+        if (!yu_int_parse(value, &v) || v < 0) return 400;
+        if (v > YU_HTTP_MAX_BODY) return 413;
+        content_length = v;
+      }
     }
     i = j + 2;
   }
@@ -191,10 +201,10 @@ static bool read_request(int fd, yu_http_request *req) {
     if (n <= 0) break;
     yu_sb_str(&raw, (yu_str){buf, n});
   }
-  int64_t have = raw.len - header_end;
-  if (have > content_length) have = content_length;
-  req->f_body = dup_str((yu_str){raw.p + header_end, have});
-  return true;
+  // the declared body must arrive in full; a short body is an incomplete request
+  if (raw.len - header_end < content_length) return 400;
+  req->f_body = dup_str((yu_str){raw.p + header_end, content_length});
+  return 0;
 }
 
 void yu_http_serve(int64_t port, yu_http_handler h) {
@@ -216,7 +226,10 @@ void yu_http_serve(int64_t port, yu_http_handler h) {
     if (fd < 0) continue;
     yu_arena_mark mark = yu_arena_mark_now();
     yu_http_request req;
-    if (read_request(fd, &req)) {
+    int status = yu_http_read_request(fd, &req);
+    if (status != 0) {
+      send_response(fd, yu_http_response_text(status, status == 413 ? yu_str_lit("request too large", 17) : yu_str_lit("bad request", 11)));
+    } else {
       char idbuf[32];
       snprintf(idbuf, sizeof idbuf, "req-%lld", (long long)++counter);
       req.f_id = dup_str(yu_str_lit(idbuf, (int64_t)strlen(idbuf)));

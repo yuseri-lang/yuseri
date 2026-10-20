@@ -1,6 +1,8 @@
 #include "yu_json.h"
 
-typedef struct { yu_str s; int64_t i; } P;
+typedef struct { yu_str s; int64_t i; int depth; } P;
+
+#define YU_JSON_MAX_DEPTH 256
 
 static void ws(P *p) { while (p->i < p->s.len && (p->s.p[p->i] == ' ' || p->s.p[p->i] == '\t' || p->s.p[p->i] == '\n' || p->s.p[p->i] == '\r')) p->i++; }
 static bool at(P *p, char c) { return p->i < p->s.len && p->s.p[p->i] == c; }
@@ -100,12 +102,15 @@ static bool parse_value(P *p, yu_jv **out) {
   ws(p);
   if (p->i >= p->s.len) return false;
   uint8_t c = p->s.p[p->i];
+  // nesting is bounded so that hostile input cannot exhaust the C stack
+  if ((c == '{' || c == '[') && p->depth >= YU_JSON_MAX_DEPTH) return false;
   if (c == '{') {
     p->i++;
+    p->depth++;
     yu_jv *v = node(YU_JV_OBJECT);
     v->items = yu_list_new(sizeof(yu_jkv));
     ws(p);
-    if (at(p, '}')) { p->i++; *out = v; return true; }
+    if (at(p, '}')) { p->i++; p->depth--; *out = v; return true; }
     for (;;) {
       ws(p);
       yu_jkv kv;
@@ -117,23 +122,24 @@ static bool parse_value(P *p, yu_jv **out) {
       yu_list_push(&v->items, &kv, sizeof kv);
       ws(p);
       if (at(p, ',')) { p->i++; continue; }
-      if (at(p, '}')) { p->i++; *out = v; return true; }
+      if (at(p, '}')) { p->i++; p->depth--; *out = v; return true; }
       return false;
     }
   }
   if (c == '[') {
     p->i++;
+    p->depth++;
     yu_jv *v = node(YU_JV_ARRAY);
     v->items = yu_list_new(sizeof(yu_jv *));
     ws(p);
-    if (at(p, ']')) { p->i++; *out = v; return true; }
+    if (at(p, ']')) { p->i++; p->depth--; *out = v; return true; }
     for (;;) {
       yu_jv *e;
       if (!parse_value(p, &e)) return false;
       yu_list_push(&v->items, &e, sizeof e);
       ws(p);
       if (at(p, ',')) { p->i++; continue; }
-      if (at(p, ']')) { p->i++; *out = v; return true; }
+      if (at(p, ']')) { p->i++; p->depth--; *out = v; return true; }
       return false;
     }
   }
@@ -146,7 +152,7 @@ static bool parse_value(P *p, yu_jv **out) {
 }
 
 bool yu_json_parse(yu_str text, yu_jv **out, int64_t *err_at) {
-  P p = {text, 0};
+  P p = {text, 0, 0};
   if (!parse_value(&p, out)) { *err_at = p.i; return false; }
   ws(&p);
   if (p.i != text.len) { *err_at = p.i; return false; }

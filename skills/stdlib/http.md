@@ -12,7 +12,7 @@ struct Response { status: Int, headers: Map<String, String>, body: String }
 
 ## Functions
 
-- `http.serve(port: Int, handler: fn(Request) -> Response) -> Unit` listens on `port` and calls `handler` for every request. It never returns. A `panic` inside the handler answers `500` and the server keeps running.
+- `http.serve(port: Int, handler: fn(Request) -> Response) -> Unit` listens on `port` and calls `handler` for every request. It never returns. A `panic` inside the handler answers `500` and the server keeps running. Malformed or incomplete requests are answered with `400`, headers over 64 KiB or bodies over 1 MiB with `413`, without reaching the handler.
 - `http.response(status: Int, body: String) -> Response` with `content-type: text/plain; charset=utf-8`.
 - `http.json(status: Int, body: String) -> Response` with `content-type: application/json`.
 - `http.request(method: String, path: String, body: String) -> Request` builds a request for tests; `path` may carry a query string. `id` is `test`.

@@ -11,7 +11,13 @@ typedef struct { int64_t f_status; yu_map f_headers; yu_str f_body; } yu_http_re
 typedef yu_http_response (*yu_http_handler_fn)(void *env, yu_http_request req);
 typedef struct { yu_http_handler_fn fn; void *env; } yu_http_handler;
 
+// Limits: headers and body larger than these are answered with 413.
+#define YU_HTTP_MAX_HEADER (64 * 1024)
+#define YU_HTTP_MAX_BODY (1024 * 1024)
+
 void yu_http_serve(int64_t port, yu_http_handler h);
+// Reads one request from a socket; exposed for tests. 0 = ok, else the status to answer.
+int yu_http_read_request(int fd, yu_http_request *req);
 yu_http_response yu_http_response_text(int64_t status, yu_str body);
 yu_http_response yu_http_json(int64_t status, yu_str body);
 yu_http_request yu_http_request_make(yu_str method, yu_str path, yu_str body);

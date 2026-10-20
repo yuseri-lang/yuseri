@@ -357,7 +357,10 @@ yu_list yu_map_entries(yu_map m, int64_t vsz, int64_t voff, int64_t esz) {
 
 yu_str yu_request_id = {(const uint8_t *)"main", 4};
 
+// Copies the list first: enum values are copied by value, and two copies must never
+// write into the same buffer (a trace must show only the path this value took).
 void yu_trace_add(yu_list *trace, const char *loc) {
+  *trace = yu_list_copy(*trace, sizeof(yu_str));
   if (trace->len == 0) yu_list_push(trace, &yu_request_id, sizeof(yu_str));
   yu_str l = {(const uint8_t *)loc, (int64_t)strlen(loc)};
   yu_list_push(trace, &l, sizeof(yu_str));

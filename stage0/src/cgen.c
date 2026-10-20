@@ -988,10 +988,14 @@ static const char *gen_match(G *g, Expr *e) {
 }
 
 // Anonymous function: a static C function taking its environment first.
+static const char *mangle_binds(G *g, TyVec *binds);
+
 static const char *gen_fn_expr(G *g, Expr *e) {
   Ty *ft = sub(g, e->ty);
-  const char *name = sfmt(g, "yu_anon_%d", e->id);
-  const char *env_t = sfmt(g, "struct yu_env_%d", e->id);
+  // inside a generic instance the same anonymous function is generated once per instance
+  const char *inst = g->sub_names ? mangle_binds(g, g->sub_binds) : "";
+  const char *name = sfmt(g, "yu_anon_%d%s", e->id, inst);
+  const char *env_t = sfmt(g, "struct yu_env_%d%s", e->id, inst);
   // environment struct
   Buf env = {0};
   buf_printf(&env, "%s {", env_t);

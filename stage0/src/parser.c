@@ -275,6 +275,26 @@ static void parse_string_parts(P *p, Expr *e, Str raw, int line) {
   VEC_PUSH(p->a, &e->segs, last);
 }
 
+// True when the tokens at `<` look like generic arguments followed by `(`:
+// `List<Int>(`, `Map<String, fn(Int) -> Int>(`. `MAX < 200` is a comparison.
+static bool looks_like_type_args(P *p) {
+  int i = p->i;
+  if (p->t[i].kind != T_LT) return false;
+  int depth = 0;
+  for (; i < p->n; i++) {
+    switch (p->t[i].kind) {
+      case T_LT: depth++; break;
+      case T_GT:
+        depth--;
+        if (depth == 0) return i + 1 < p->n && p->t[i + 1].kind == T_LPAREN;
+        break;
+      case T_IDENT: case T_COMMA: case T_FN: case T_LPAREN: case T_RPAREN: case T_ARROW: break;
+      default: return false;
+    }
+  }
+  return false;
+}
+
 static Expr *parse_primary(P *p) {
   Token *t = cur(p);
   switch (t->kind) {
@@ -298,7 +318,7 @@ static Expr *parse_primary(P *p) {
       advance(p);
       if (is_upper(t->text)) {
         if (at(p, T_LBRACE) && p->no_struct == 0) return parse_struct_lit(p, t->text, t->line);
-        if (at(p, T_LT)) {
+        if (at(p, T_LT) && looks_like_type_args(p)) {
           // generic constructor: List<Int>() / Map<K, V>()
           Expr *e = new_expr(p, E_TYPECTOR, t->line);
           Type *ty = NEW(p->a, Type);

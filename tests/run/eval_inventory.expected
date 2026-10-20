@@ -1,0 +1,8 @@
+ok   total_qty: empty list
+ok   total_qty: several items
+ok   find_sku: empty list
+ok   find_sku: found and not found
+ok   find_sku: first match wins
+ok   qty_by_sku: empty list
+ok   qty_by_sku: sums per sku
+7 tests, 0 failed

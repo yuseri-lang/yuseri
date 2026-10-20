@@ -1,0 +1,66 @@
+struct Item { sku: String, qty: Int }
+
+fn total_qty(items: List<Item>) -> Int {
+  var total = 0
+  for item in items {
+    total = total + item.qty   // ASSUMED: a `for` body may assign to a `var` declared outside the loop (the no-capture rule in 8 is only for anonymous functions)
+  }
+  total
+}
+
+fn find_sku(items: List<Item>, sku: String) -> Option<Item> {
+  for item in items {
+    if item.sku == sku { return Some(item) }
+  }
+  None
+}
+
+fn qty_by_sku(items: List<Item>) -> Map<String, Int> {
+  var m = Map<String, Int>()
+  for item in items {
+    let current = m.get(item.sku).unwrap_or(0)
+    m.set(item.sku, current + item.qty)
+  }
+  m
+}
+
+test "total_qty: empty list" {
+  let items = List<Item>()   // ASSUMED: `let` is allowed for an empty List constructor (the spec only shows `var xs = List<Int>()`)
+  assert_eq(total_qty(items), 0)
+}
+
+test "total_qty: several items" {
+  let items = [Item { sku: "A", qty: 2 }, Item { sku: "B", qty: 5 }, Item { sku: "A", qty: 3 }]
+  assert_eq(total_qty(items), 10)
+}
+
+test "find_sku: empty list" {
+  let items = List<Item>()
+  assert_eq(find_sku(items, "A"), None)   // ASSUMED: `None` alone is typed from the other argument of assert_eq<T>
+}
+
+test "find_sku: found and not found" {
+  let items = [Item { sku: "A", qty: 2 }, Item { sku: "B", qty: 5 }]
+  assert_eq(find_sku(items, "B"), Some(Item { sku: "B", qty: 5 }))
+  assert_eq(find_sku(items, "Z"), None)
+}
+
+test "find_sku: first match wins" {
+  let items = [Item { sku: "A", qty: 2 }, Item { sku: "A", qty: 9 }]
+  assert_eq(find_sku(items, "A"), Some(Item { sku: "A", qty: 2 }))
+}
+
+test "qty_by_sku: empty list" {
+  let items = List<Item>()
+  let m = qty_by_sku(items)
+  assert_eq(m.len(), 0)
+}
+
+test "qty_by_sku: sums per sku" {
+  let items = [Item { sku: "A", qty: 2 }, Item { sku: "B", qty: 5 }, Item { sku: "A", qty: 3 }]
+  let m = qty_by_sku(items)
+  assert_eq(m.len(), 2)
+  assert_eq(m.get("A"), Some(5))
+  assert_eq(m.get("B"), Some(5))
+  assert_eq(m.get("C"), None)
+}

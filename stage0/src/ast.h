@@ -11,6 +11,8 @@ typedef struct Stmt Stmt;
 typedef struct Block Block;
 typedef struct Pattern Pattern;
 typedef struct Decl Decl;
+struct Ty;  // semantic type (types.h); filled in by the checker
+typedef VEC(struct Ty *) SemTyVec;
 typedef struct Param Param;
 typedef struct FieldInit FieldInit;
 typedef struct PatField PatField;
@@ -41,6 +43,7 @@ struct Param {
   Str name;
   Type *type;  // NULL only for `self`
   int line;
+  struct Ty *ty;  // resolved by the checker
 };
 
 struct FieldInit {
@@ -68,6 +71,7 @@ struct Pattern {
   StrVec path;          // PAT_VARIANT: e.g. ["Status", "Banned"] or ["Some"]
   PatFieldVec fields;   // PAT_VARIANT
   bool has_parens;      // PAT_VARIANT: written with (...)
+  struct Ty *ty;        // type of the matched value (checker)
 };
 
 struct MatchArm {
@@ -115,7 +119,24 @@ struct Expr {
   Type *ret;            // E_FN
   Type *type;           // E_TYPECTOR
   bool bool_val;
+  struct Ty *ty;        // type of the expression (checker)
+  StrVec cap_names;     // E_FN: captured outer bindings, by value
+  SemTyVec cap_types;   // E_FN: their types
+  int id;               // E_FN: unique number for the generated C function
+  Decl *method;         // E_CALL: resolved impl method, if any
+  int call_kind;        // E_CALL: see CallKind
 };
+
+typedef enum {
+  CK_UNKNOWN,
+  CK_FN,        // user function by name
+  CK_VALUE,     // function value (local, parameter, captured)
+  CK_METHOD,    // impl method: callee is E_FIELD(obj, name)
+  CK_BUILTIN,   // builtin method on List / Map / Option / Result / String / enum
+  CK_STATIC,    // Int.parse, Float.from, String.from
+  CK_VARIANT,   // Enum.Variant(fields)
+  CK_PRELUDE,   // Some / Ok / Err / assert / assert_eq / panic
+} CallKind;
 
 typedef enum { S_LET, S_ASSIGN, S_EXPR, S_RETURN, S_BREAK, S_CONTINUE, S_FOR, S_WHILE } StmtKind;
 
@@ -127,6 +148,7 @@ struct Stmt {
   Expr *target;    // S_ASSIGN
   Expr *value;     // S_LET, S_ASSIGN, S_EXPR, S_RETURN (may be NULL), S_FOR iterable, S_WHILE cond
   Block *body;     // S_FOR, S_WHILE
+  struct Ty *ty;   // S_LET: type of the binding; S_FOR: element type (checker)
 };
 
 struct Block {
@@ -155,6 +177,7 @@ struct Decl {
   DeclVec methods;      // impl
   StrVec path;          // import path segments
   Expr *value;          // const
+  struct Ty *ty;        // fn: function type; const: value type (checker)
 };
 
 typedef struct {

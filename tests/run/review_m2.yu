@@ -1,0 +1,50 @@
+// Review findings on M2: value semantics through method results, shadowing, Float %
+struct Bag { items: List<Int> }
+
+fn first_or_empty(xs: List<List<Int>>) -> List<Int> { xs.get(0).unwrap_or([]) }
+
+test "values taken out of a list are copies" {
+  var xs = [[1]]
+  var ys = xs.get(0).unwrap_or([])
+  ys[0] = 9
+  assert_eq(xs[0][0], 1)
+  var zs = first_or_empty(xs)
+  zs.push(5)
+  assert_eq(xs[0], [1])
+  var m = Map<String, List<Int>>()
+  m.set("a", [1])
+  var got = m.get("a").unwrap_or([])
+  got.push(2)
+  assert_eq(m.get("a"), Some([1]))
+  let bag = Bag { items: [1] }
+  var copy = bag.items
+  copy.push(2)
+  assert_eq(bag.items, [1])
+}
+
+test "shadowing reads the outer binding" {
+  let x = 7
+  if true {
+    let x = x + 1
+    assert_eq(x, 8)
+  }
+  assert_eq(x, 7)
+  let y = match Some(x) {
+    Some(x) => x * 2
+    None => 0
+  }
+  assert_eq(y, 14)
+  var total = 0
+  for x in [1, 2] {
+    let x = x * 10
+    total = total + x
+  }
+  assert_eq(total, 30)
+  let add = fn(x: Int) -> Int { x + y }
+  assert_eq(add(1), 15)
+}
+
+test "float modulo" {
+  assert_eq(5.5 % 2.0, 1.5)
+  assert_eq(7 % 3, 1)
+}

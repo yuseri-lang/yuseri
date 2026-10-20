@@ -21,7 +21,35 @@ typedef struct {
   Ty *fn_ret;   // return type of the function being generated (for `?`)
   const char *fn_cname;
   DeclVec structs, enums, consts, fns;
+  // Yuseri bindings in scope, innermost last; each gets a unique C name
+  struct { Str name; const char *cname; } *binds;
+  int nbinds, cbinds;
 } G;
+
+static char *sfmt(G *g, const char *fmt, ...);
+
+static int scope_push(G *g) { return g->nbinds; }
+static void scope_pop(G *g, int mark) { g->nbinds = mark; }
+
+// Declares a new binding and returns its C name. Call after the initializer is generated.
+static const char *bind_new(G *g, Str name) {
+  if (g->nbinds == g->cbinds) {
+    g->cbinds = g->cbinds ? g->cbinds * 2 : 32;
+    void *nb = arena_alloc(g->a, (size_t)g->cbinds * sizeof(*g->binds));
+    if (g->nbinds) memcpy(nb, g->binds, (size_t)g->nbinds * sizeof(*g->binds));
+    g->binds = nb;
+  }
+  const char *cname = sfmt(g, "v_%s_%d", arena_cstr(g->a, name), ++g->tmp);
+  g->binds[g->nbinds].name = name;
+  g->binds[g->nbinds].cname = cname;
+  g->nbinds++;
+  return cname;
+}
+
+static const char *bind_ref(G *g, Str name) {
+  for (int i = g->nbinds - 1; i >= 0; i--) if (str_eq(g->binds[i].name, name)) return g->binds[i].cname;
+  return sfmt(g, "v_%s", arena_cstr(g->a, name));  // not reached for checked code
+}
 
 static void gen_stmts(G *g, Block *b);
 static const char *gen_expr(G *g, Expr *e);
@@ -495,12 +523,16 @@ static const char *str_lit(G *g, Str raw) {
 
 // ---- expressions -------------------------------------------------------
 
-static bool is_lvalue(Expr *e) { return e->kind == E_IDENT || e->kind == E_FIELD || e->kind == E_INDEX; }
+// True for expressions that build a brand-new value (nothing else can share its buffers).
+static bool is_fresh(Expr *e) {
+  return e->kind == E_LIST || e->kind == E_TYPECTOR || e->kind == E_STRING || (e->kind == E_STRUCT && !e->base);
+}
 
-// Reads a value for storing somewhere new: deep-copies list-bearing values read from places.
+// Reads a value for storing somewhere new. Values that contain a List or Map are deep-copied
+// unless the expression is a fresh constructor: this keeps the value semantics of core.md.
 static const char *gen_value(G *g, Expr *e) {
   const char *v = gen_expr(g, e);
-  if (is_lvalue(e) && e->ty && needs_copy(e->ty)) return sfmt(g, "%s(%s)", copy_fn(g, e->ty), v);
+  if (e->ty && needs_copy(e->ty) && !is_fresh(e)) return sfmt(g, "%s(%s)", copy_fn(g, e->ty), v);
   return v;
 }
 
@@ -567,7 +599,7 @@ static const char *gen_expr(G *g, Expr *e) {
         return sfmt(g, "(%s){%s, NULL}", ctype(g, t), fn_thunk(g, d));
       }
       if (e->call_kind == CK_STATIC) return fn_cname(g, e->text);
-      return var_cname(g, e->text);
+      return bind_ref(g, e->text);
     }
     case E_FIELD: {
       Expr *obj = e->a;
@@ -619,7 +651,7 @@ static const char *gen_expr(G *g, Expr *e) {
         case T_MINUS: return is_int ? sfmt(g, "yu_sub(%s, %s, %s)", l, r, loc(g, e->line)) : sfmt(g, "(%s - %s)", l, r);
         case T_STAR: return is_int ? sfmt(g, "yu_mul(%s, %s, %s)", l, r, loc(g, e->line)) : sfmt(g, "(%s * %s)", l, r);
         case T_SLASH: return is_int ? sfmt(g, "yu_div(%s, %s, %s)", l, r, loc(g, e->line)) : sfmt(g, "(%s / %s)", l, r);
-        case T_PERCENT: return sfmt(g, "yu_mod(%s, %s, %s)", l, r, loc(g, e->line));
+        case T_PERCENT: return is_int ? sfmt(g, "yu_mod(%s, %s, %s)", l, r, loc(g, e->line)) : sfmt(g, "fmod(%s, %s)", l, r);
         case T_EQ: case T_NE: {
           const char *cmp;
           if (is_int || is_float || lt->kind == TY_BOOL) cmp = sfmt(g, "(%s == %s)", l, r);
@@ -688,7 +720,7 @@ static const char *gen_expr(G *g, Expr *e) {
 // A place expression (no copy): used for receivers, field access and assignment targets.
 static const char *gen_place(G *g, Expr *e) {
   switch (e->kind) {
-    case E_IDENT: return var_cname(g, e->text);
+    case E_IDENT: return bind_ref(g, e->text);
     case E_FIELD: {
       const char *o = gen_place(g, e->a);
       if (e->a->ty->kind == TY_ENTRY) return sfmt(g, "%s.%s", o, cs(g, e->text));
@@ -715,6 +747,7 @@ static void gen_assign_value(G *g, Expr *e, const char *target, Ty *ty) {
 
 // Emits the statements of a block; the last expression goes to `target` when given.
 static void gen_block_into(G *g, Block *b, const char *target, Ty *ty) {
+  int mark = scope_push(g);
   for (int i = 0; i < b->stmts.len; i++) {
     Stmt *s = b->stmts.items[i];
     bool last = i == b->stmts.len - 1;
@@ -725,6 +758,7 @@ static void gen_block_into(G *g, Block *b, const char *target, Ty *ty) {
       gen_stmts(g, &one);
     }
   }
+  scope_pop(g, mark);
 }
 
 static const char *gen_if(G *g, Expr *e) {
@@ -869,7 +903,7 @@ static const char *pat_cond(G *g, Pattern *p, const char *subj, Ty *t) {
 static void pat_bind(G *g, Pattern *p, const char *subj, Ty *t) {
   switch (p->kind) {
     case PAT_WILD: case PAT_LIT: return;
-    case PAT_BIND: emit(g, "%s %s = %s;", ctype(g, t), var_cname(g, p->name), subj); return;
+    case PAT_BIND: { const char *cn = bind_new(g, p->name); emit(g, "%s %s = %s;", ctype(g, t), cn, subj); return; }
     case PAT_VARIANT: {
       Str head = p->path.items[p->path.len - 1];
       if (p->path.len == 1) {
@@ -910,6 +944,7 @@ static const char *gen_match(G *g, Expr *e) {
     const char *cond = pat_cond(g, arm->pat, subj, st);
     emit(g, "if (%s) {", cond);
     g->indent++;
+    int arm_mark = scope_push(g);
     pat_bind(g, arm->pat, subj, st);
     if (arm->guard) {
       const char *gc = gen_expr(g, arm->guard);
@@ -920,6 +955,7 @@ static const char *gen_match(G *g, Expr *e) {
     if (arm->body->kind == E_BLOCK) gen_block_into(g, arm->body->block, r, t);
     else gen_assign_value(g, arm->body, r, t);
     if (arm->guard) { g->indent--; emit(g, "}"); }
+    scope_pop(g, arm_mark);
     g->indent--;
     emit(g, "}");
     g->indent--;
@@ -942,9 +978,18 @@ static const char *gen_fn_expr(G *g, Expr *e) {
   buf_puts(&g->types, env.p);
   buf_free(&env);
   // prototype
+  // closure value: capture the outer bindings before the inner scope shadows them
+  Buf capinit = {0};
+  for (int i = 0; i < e->cap_names.len; i++)
+    buf_printf(&capinit, "->%s = %s;\n", var_cname(g, e->cap_names.items[i]), bind_ref(g, e->cap_names.items[i]));
+  int fn_mark = scope_push(g);
   Buf sig = {0};
   buf_printf(&sig, "static %s %s(void *env_", ctype(g, ft->ret), name);
-  for (int i = 0; i < e->params.len; i++) buf_printf(&sig, ", %s %s", ctype(g, e->params.items[i].ty), var_cname(g, e->params.items[i].name));
+  const char **pnames = arena_alloc(g->a, sizeof(char *) * (size_t)(e->params.len + 1));
+  for (int i = 0; i < e->params.len; i++) {
+    pnames[i] = bind_new(g, e->params.items[i].name);
+    buf_printf(&sig, ", %s %s", ctype(g, e->params.items[i].ty), pnames[i]);
+  }
   buf_puts(&sig, ")");
   buf_printf(&g->protos, "%s;\n", sig.p);
   // body, generated into its own buffer so the enclosing function is not interrupted
@@ -956,9 +1001,11 @@ static const char *gen_fn_expr(G *g, Expr *e) {
   g->fn_ret = ft->ret;
   g->indent = 1;
   emit(g, "(void)env_;");
-  for (int i = 0; i < e->cap_names.len; i++)
-    emit(g, "%s %s = ((%s *)env_)->%s;", ctype(g, (Ty *)e->cap_types.items[i]), var_cname(g, e->cap_names.items[i]), env_t, var_cname(g, e->cap_names.items[i]));
-  for (int i = 0; i < e->params.len; i++) emit(g, "(void)%s;", var_cname(g, e->params.items[i].name));
+  for (int i = 0; i < e->cap_names.len; i++) {
+    const char *cn = bind_new(g, e->cap_names.items[i]);
+    emit(g, "%s %s = ((%s *)env_)->%s; (void)%s;", ctype(g, (Ty *)e->cap_types.items[i]), cn, env_t, var_cname(g, e->cap_names.items[i]), cn);
+  }
+  for (int i = 0; i < e->params.len; i++) emit(g, "(void)%s;", pnames[i]);
   if (ft->ret->kind == TY_UNIT) { gen_block_into(g, e->block, NULL, NULL); emit(g, "return YU_UNIT;"); }
   else {
     const char *r = newtmp(g);
@@ -969,13 +1016,21 @@ static const char *gen_fn_expr(G *g, Expr *e) {
   g->out = saved_out;
   g->fn_ret = saved_ret;
   g->indent = saved_indent;
+  scope_pop(g, fn_mark);
   buf_printf(&g->code, "%s {\n%s}\n\n", sig.p, body.p);
   buf_free(&sig);
   buf_free(&body);
-  // closure value
   const char *ev = newtmp(g);
   emit(g, "%s *%s = yu_alloc(sizeof(%s));", env_t, ev, env_t);
-  for (int i = 0; i < e->cap_names.len; i++) emit(g, "%s->%s = %s;", ev, var_cname(g, e->cap_names.items[i]), var_cname(g, e->cap_names.items[i]));
+  // capinit lines are "->field = value;\n": prefix each with the env pointer
+  for (char *line = capinit.p; line && *line;) {
+    char *nl = strchr(line, '\n');
+    if (nl) *nl = 0;
+    emit(g, "%s%s", ev, line);
+    if (!nl) break;
+    line = nl + 1;
+  }
+  buf_free(&capinit);
   return sfmt(g, "(%s){%s, %s}", ctype(g, ft), name, ev);
 }
 
@@ -1230,11 +1285,13 @@ static void gen_stmts(G *g, Block *b) {
         if (s->ty->kind == TY_UNIT || s->ty->kind == TY_NEVER) {
           const char *v = gen_expr(g, s->value);
           emit(g, "(void)(%s);", v);
-          emit(g, "yu_unit %s = YU_UNIT; (void)%s;", var_cname(g, s->name), var_cname(g, s->name));
+          const char *cn = bind_new(g, s->name);
+          emit(g, "yu_unit %s = YU_UNIT; (void)%s;", cn, cn);
           break;
         }
-        const char *v = gen_value(g, s->value);
-        emit(g, "%s %s = %s;", ctype(g, s->ty), var_cname(g, s->name), v);
+        const char *v = gen_value(g, s->value);  // generated before the new name shadows an outer one
+        const char *cn = bind_new(g, s->name);
+        emit(g, "%s %s = %s;", ctype(g, s->ty), cn, v);
         break;
       }
       case S_ASSIGN: {
@@ -1258,22 +1315,26 @@ static void gen_stmts(G *g, Block *b) {
       case S_CONTINUE: emit(g, "continue;"); break;
       case S_FOR: {
         Expr *it = s->value;
+        int loop_mark = scope_push(g);
         if (it->kind == E_BINARY && it->op == T_DOTDOT) {
           const char *lo = gen_temp(g, it->a), *hi = gen_temp(g, it->b);
           const char *i = newtmp(g);
           emit(g, "for (int64_t %s = %s; %s < %s; %s++) {", i, lo, i, hi, i);
           g->indent++;
-          emit(g, "int64_t %s = %s; (void)%s;", var_cname(g, s->name), i, var_cname(g, s->name));
+          const char *cn = bind_new(g, s->name);
+          emit(g, "int64_t %s = %s; (void)%s;", cn, i, cn);
         } else {
           const char *l = gen_temp(g, it);
           const char *i = newtmp(g);
           emit(g, "for (int64_t %s = 0; %s < %s.len; %s++) {", i, i, l, i);
           g->indent++;
-          emit(g, "%s %s = ((%s *)%s.p)[%s]; (void)%s;", ctype(g, s->ty), var_cname(g, s->name), ctype(g, s->ty), l, i, var_cname(g, s->name));
+          const char *cn = bind_new(g, s->name);
+          emit(g, "%s %s = ((%s *)%s.p)[%s]; (void)%s;", ctype(g, s->ty), cn, ctype(g, s->ty), l, i, cn);
         }
         gen_block_into(g, s->body, NULL, NULL);
         g->indent--;
         emit(g, "}");
+        scope_pop(g, loop_mark);
         break;
       }
       case S_WHILE: {
@@ -1296,10 +1357,13 @@ static void gen_fn_decl(G *g, Decl *d, Ty *self_type) {
   Ty *ft = d->ty;
   Buf sig = {0};
   const char *name = self_type ? method_cname(g, self_type->name, d->name) : fn_cname(g, d->name);
+  int fn_mark = scope_push(g);
   buf_printf(&sig, "static %s %s(", ctype(g, ft->ret), name);
+  const char **pnames = arena_alloc(g->a, sizeof(char *) * (size_t)(d->params.len + 1));
   for (int i = 0; i < d->params.len; i++) {
     if (i) buf_puts(&sig, ", ");
-    buf_printf(&sig, "%s %s", ctype(g, d->params.items[i].ty), var_cname(g, d->params.items[i].name));
+    pnames[i] = bind_new(g, d->params.items[i].name);
+    buf_printf(&sig, "%s %s", ctype(g, d->params.items[i].ty), pnames[i]);
   }
   if (d->params.len == 0) buf_puts(&sig, "void");
   buf_puts(&sig, ")");
@@ -1308,7 +1372,7 @@ static void gen_fn_decl(G *g, Decl *d, Ty *self_type) {
   g->out = &body;
   g->fn_ret = ft->ret;
   g->indent = 1;
-  for (int i = 0; i < d->params.len; i++) emit(g, "(void)%s;", var_cname(g, d->params.items[i].name));
+  for (int i = 0; i < d->params.len; i++) emit(g, "(void)%s;", pnames[i]);
   if (ft->ret->kind == TY_UNIT) { gen_block_into(g, d->body, NULL, NULL); emit(g, "return YU_UNIT;"); }
   else {
     const char *r = newtmp(g);
@@ -1319,6 +1383,7 @@ static void gen_fn_decl(G *g, Decl *d, Ty *self_type) {
   buf_printf(&g->code, "%s {\n%s}\n\n", sig.p, body.p);
   buf_free(&sig);
   buf_free(&body);
+  scope_pop(g, fn_mark);
   g->out = NULL;
 }
 
@@ -1380,7 +1445,7 @@ void cgen_module(Arena *a, Module *m, bool tests, Buf *out) {
     }
   }
   // assemble
-  buf_puts(out, "// generated by yuseri stage0; do not edit\n#include \"yu_rt.h\"\n#include <stddef.h>\n\n");
+  buf_puts(out, "// generated by yuseri stage0; do not edit\n#include \"yu_rt.h\"\n#include <math.h>\n#include <stddef.h>\n\n");
   buf_write(out, g->types.p ? g->types.p : "", g->types.len);
   buf_puts(out, "\n");
   buf_write(out, consts.p ? consts.p : "", consts.len);

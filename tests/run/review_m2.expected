@@ -1,0 +1,4 @@
+ok   values taken out of a list are copies
+ok   shadowing reads the outer binding
+ok   float modulo
+3 tests, 0 failed

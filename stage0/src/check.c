@@ -1025,6 +1025,7 @@ static void check_stmt(C *c, Stmt *s) {
 // Type of a block: the last expression statement, or Unit. `expected` flows into the last expression.
 static Ty *check_block(C *c, Block *b, Ty *expected) {
   Ty *t = ty_prim(TY_UNIT);
+  push_scope(c);  // every block is its own scope: a loop body may shadow the loop variable
   for (int i = 0; i < b->stmts.len; i++) {
     Stmt *s = b->stmts.items[i];
     bool last = i == b->stmts.len - 1;
@@ -1036,6 +1037,7 @@ static Ty *check_block(C *c, Block *b, Ty *expected) {
       if (last && s->kind == S_RETURN) t = ty_prim(TY_NEVER);
     }
   }
+  pop_scope(c);
   return t;
 }
 

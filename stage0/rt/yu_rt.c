@@ -2,16 +2,18 @@
 
 #include <ctype.h>
 #include <stdarg.h>
+#include <time.h>
 
 // ---- arena --------------------------------------------------------------
 
 typedef struct Chunk { struct Chunk *next; size_t used, cap; char data[]; } Chunk;
 struct yu_arena { Chunk *head; };
-static yu_arena g_main_arena = {NULL};
-static yu_arena *g_cur = &g_main_arena;  // where yu_alloc allocates
+static yu_arena g_main_arena = {NULL};  // main's values; workers only read them
+static _Thread_local yu_arena *g_cur = &g_main_arena;  // where yu_alloc allocates on this thread
 #define CHUNK (256 * 1024)
 
 void *yu_alloc(size_t n) {
+  yu_tick();
   n = (n + 15) & ~(size_t)15;
   Chunk *c = g_cur->head;
   if (!c || c->used + n > c->cap) {
@@ -49,19 +51,75 @@ yu_arena *yu_arena_use(yu_arena *a) { yu_arena *prev = g_cur; g_cur = a ? a : &g
 
 // ---- Store ----------------------------------------------------------------
 
+// Stores this thread is inside (lock held, or an update begun): released by yu_fail so a
+// failing request never leaves a lock held or the thread allocating into a half-built arena.
+typedef struct { yu_store *s; bool locked; } Held;
+#define MAX_HELD 8
+static _Thread_local Held g_held[MAX_HELD];
+static _Thread_local int g_nheld = 0;
+
+static Held *held_find(yu_store *s) {
+  for (int i = 0; i < g_nheld; i++) if (g_held[i].s == s) return &g_held[i];
+  return NULL;
+}
+
+static Held *held_push(yu_store *s, const char *loc) {
+  Held *h = held_find(s);
+  if (h) return h;
+  if (g_nheld == MAX_HELD) yu_fail("R-STORE-02", loc, "too many nested Store operations");
+  g_held[g_nheld] = (Held){s, false};
+  return &g_held[g_nheld++];
+}
+
+static void held_drop(yu_store *s) {
+  for (int i = 0; i < g_nheld; i++) {
+    if (g_held[i].s != s) continue;
+    memmove(&g_held[i], &g_held[i + 1], (size_t)(g_nheld - i - 1) * sizeof(Held));
+    g_nheld--;
+    return;
+  }
+}
+
 yu_store *yu_store_new(int64_t vsz) {
   yu_store *s = calloc(1, sizeof *s);
   s->vsz = vsz;
   s->arena = yu_arena_new();
+  pthread_mutex_init(&s->mu, NULL);
   yu_arena *prev = yu_arena_use(s->arena);
   s->value = yu_alloc((size_t)vsz);
   yu_arena_use(prev);
   return s;
 }
 
+void yu_store_lock(yu_store *s, const char *loc) {
+  Held *h = held_find(s);
+  if (h && h->locked) yu_fail("R-STORE-02", loc, "update inside an update of the same Store");
+  pthread_mutex_lock(&s->mu);
+  h = held_push(s, loc);
+  h->locked = true;
+}
+
+void yu_store_unlock(yu_store *s) {
+  Held *h = held_find(s);
+  if (!h) return;
+  if (s->pending) {  // begun but never committed: drop the half-built value
+    yu_arena_use(s->prev_arena);
+    yu_arena_free(s->pending);
+    s->pending = NULL;
+  }
+  if (h->locked) pthread_mutex_unlock(&s->mu);
+  held_drop(s);
+}
+
+static void release_all_held(void) {
+  while (g_nheld > 0) yu_store_unlock(g_held[g_nheld - 1].s);
+}
+
 yu_arena *yu_store_begin(yu_store *s) {
-  (void)s;
-  return yu_arena_use(yu_arena_new());
+  held_push(s, "Store");
+  s->prev_arena = g_cur;
+  s->pending = yu_arena_new();
+  return yu_arena_use(s->pending);
 }
 
 void yu_store_commit(yu_store *s, const void *copied, yu_arena *prev) {
@@ -76,12 +134,43 @@ void yu_store_commit(yu_store *s, const void *copied, yu_arena *prev) {
   yu_arena_free(s->arena);
   s->arena = fresh;
   s->value = slot;
+  s->pending = NULL;
+  Held *h = held_find(s);
+  if (h && !h->locked) held_drop(s);
 }
 
 void yu_store_abort(yu_store *s, yu_arena *prev) {
-  (void)s;
   yu_arena *fresh = yu_arena_use(prev);
   yu_arena_free(fresh);
+  s->pending = NULL;
+  Held *h = held_find(s);
+  if (h && !h->locked) held_drop(s);
+}
+
+// ---- deadlines ------------------------------------------------------------
+
+_Thread_local uint32_t yu_ticks = 0;
+static _Thread_local int64_t g_deadline_at = 0, g_deadline_len = 0;
+
+int64_t yu_now_ms(void) {
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+void yu_deadline_set(int64_t at_ms, int64_t len_ms) { g_deadline_at = at_ms; g_deadline_len = len_ms; }
+
+int64_t yu_deadline_remaining_ms(void) {
+  if (!g_deadline_at) return 0;
+  int64_t left = g_deadline_at - yu_now_ms();
+  return left > 0 ? left : 0;
+}
+
+void yu_deadline_check(void) {
+  if (!g_deadline_at || yu_now_ms() <= g_deadline_at) return;
+  int64_t len = g_deadline_len;
+  g_deadline_at = 0;  // the failure path itself allocates; it must not fail again
+  yu_fail("R-TIME-01", "std.http", "request exceeded its %lld ms deadline", (long long)len);
 }
 
 // ---- failures -------------------------------------------------------------
@@ -98,20 +187,23 @@ static const char *hint_for(const char *id) {
   return "see errors.md";
 }
 
-static jmp_buf g_catch[8];
-static int g_ncatch = 0;
+static _Thread_local jmp_buf g_catch[8];
+static _Thread_local int g_ncatch = 0;
 
 void yu_catch_push(void) { if (g_ncatch < 8) g_ncatch++; }
 jmp_buf *yu_catch_buf(void) { return &g_catch[g_ncatch - 1]; }
 void yu_catch_end(void) { if (g_ncatch > 0) g_ncatch--; }
 
 void yu_fail(const char *id, const char *loc, const char *fmt, ...) {
-  fprintf(stderr, "%s %s ", id, loc);
+  char msg[4096];
   va_list ap;
   va_start(ap, fmt);
-  vfprintf(stderr, fmt, ap);
+  vsnprintf(msg, sizeof msg, fmt, ap);
   va_end(ap);
-  fprintf(stderr, "; %s\n", hint_for(id));
+  // one fprintf call per line: lines from different workers never interleave
+  if (yu_serving) fprintf(stderr, "%.*s %s %s %s; %s\n", (int)yu_request_id.len, (const char *)yu_request_id.p, id, loc, msg, hint_for(id));
+  else fprintf(stderr, "%s %s %s; %s\n", id, loc, msg, hint_for(id));
+  release_all_held();
   if (g_ncatch > 0) { int i = --g_ncatch; longjmp(g_catch[i], 1); }
   exit(1);
 }
@@ -414,7 +506,8 @@ yu_list yu_map_entries(yu_map m, int64_t vsz, int64_t voff, int64_t esz) {
 
 // ---- traces ---------------------------------------------------------------
 
-yu_str yu_request_id = {(const uint8_t *)"main", 4};
+_Thread_local yu_str yu_request_id = {(const uint8_t *)"main", 4};
+_Thread_local bool yu_serving = false;
 
 // Copies the list first: enum values are copied by value, and two copies must never
 // write into the same buffer (a trace must show only the path this value took).
@@ -442,7 +535,7 @@ int yu_test_run(const char *name, void (*fn)(void)) {
   yu_request_id = (yu_str){(const uint8_t *)name, (int64_t)strlen(name)};
   bool ok;
   if (yu_catch_begin()) { fn(); yu_catch_end(); ok = true; }
-  else ok = false;
+  else { ok = false; yu_arena_use(NULL); }
   if (ok) printf("ok   %s\n", name);
   else { printf("fail %s\n", name); g_failed++; }
   fflush(stdout);

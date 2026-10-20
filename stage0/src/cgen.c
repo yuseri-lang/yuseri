@@ -1232,19 +1232,27 @@ static const char *gen_builtin(G *g, Expr *e) {
       const char *st = gen_temp(g, obj);
       const char *tt = ctype(g, T);
       if (IS("get")) {
-        // a copy into the caller's arena: nothing from the store's arena escapes
+        // a copy into the caller's arena, taken under the lock: nothing from the store's
+        // arena escapes, and no update can free that arena half-way through the copy
         const char *r = newtmp(g);
+        emit(g, "yu_store_lock(%s, %s);", st, loc(g, e->line));
         if (needs_copy(g, T)) emit(g, "%s %s = %s(*(%s *)%s->value);", tt, r, copy_fn(g, T), tt, st);
         else emit(g, "%s %s = *(%s *)%s->value;", tt, r, tt, st);
+        emit(g, "yu_store_unlock(%s);", st);
         return r;
       }
       if (IS("set") || IS("update") || IS("try_update")) {
+        // the lock is held from reading the current value to commit: concurrent updates
+        // serialize, and each one sees the value the previous one left
         const char *nv = newtmp(g);
         const char *res = NULL;
-        if (IS("set")) emit(g, "%s %s = %s;", tt, nv, gen_value(g, e->args.items[0]));
-        else {
+        if (IS("set")) {
+          emit(g, "%s %s = %s;", tt, nv, gen_value(g, e->args.items[0]));
+          emit(g, "yu_store_lock(%s, %s);", st, loc(g, e->line));
+        } else {
           const char *f = gen_temp(g, e->args.items[0]);
           const char *cur = newtmp(g);
+          emit(g, "yu_store_lock(%s, %s);", st, loc(g, e->line));
           if (needs_copy(g, T)) emit(g, "%s %s = %s(*(%s *)%s->value);", tt, cur, copy_fn(g, T), tt, st);
           else emit(g, "%s %s = *(%s *)%s->value;", tt, cur, tt, st);
           if (IS("update")) {
@@ -1264,7 +1272,9 @@ static const char *gen_builtin(G *g, Expr *e) {
         if (needs_copy(g, T)) emit(g, "%s %s = %s(%s);", tt, cp, copy_fn(g, T), nv);
         else emit(g, "%s %s = %s;", tt, cp, nv);
         emit(g, "yu_store_commit(%s, &%s, %s);", st, cp, prev);
-        if (IS("try_update")) { g->indent--; emit(g, "}"); return res; }
+        if (IS("try_update")) { g->indent--; emit(g, "}"); }
+        emit(g, "yu_store_unlock(%s);", st);
+        if (IS("try_update")) return res;
         if (IS("update")) return nv;
         return "YU_UNIT";
       }
@@ -1419,13 +1429,23 @@ static const char *gen_module_call(G *g, Expr *e) {
   Str mod = f->a->text, fnm = f->text;
   Ty *t = sub(g, e->ty);
   if (str_eq_c(mod, "http")) {
-    if (str_eq_c(fnm, "serve")) {
+    if (str_eq_c(fnm, "serve") || str_eq_c(fnm, "serve_with")) {
       const char *net = gen_expr(g, e->args.items[0]);
-      const char *port = gen_expr(g, e->args.items[1]);
+      const char *port, *deadline, *workers;
+      if (str_eq_c(fnm, "serve")) {
+        port = gen_expr(g, e->args.items[1]);
+        deadline = "YU_HTTP_DEFAULT_DEADLINE_MS";
+        workers = "0";
+      } else {
+        const char *o = gen_temp(g, e->args.items[1]);
+        port = sfmt(g, "%s.f_port", o);
+        deadline = sfmt(g, "%s.f_deadline_ms", o);
+        workers = sfmt(g, "(%s.f_workers.some ? %s.f_workers.val : 0)", o, o);
+      }
       const char *h = gen_temp(g, e->args.items[2]);
       const char *hh = newtmp(g);
       emit(g, "yu_http_handler %s; memcpy(&%s, &%s, sizeof %s);", hh, hh, h, hh);
-      emit(g, "yu_http_serve(%s, %s, %s);", net, port, hh);
+      emit(g, "yu_http_serve(%s, %s, %s, %s, %s);", net, port, hh, deadline, workers);
       return "YU_UNIT";
     }
     if (str_eq_c(fnm, "response")) { const char *a0 = gen_expr(g, e->args.items[0]); const char *a1 = gen_expr(g, e->args.items[1]); return sfmt(g, "yu_http_response_text(%s, %s)", a0, a1); }
@@ -1635,6 +1655,7 @@ static void gen_stmts(G *g, Block *b) {
           const char *i = newtmp(g);
           emit(g, "for (int64_t %s = %s; %s < %s; %s++) {", i, lo, i, hi, i);
           g->indent++;
+          emit(g, "yu_tick();");
           const char *cn = bind_new(g, s->name);
           emit(g, "int64_t %s = %s; (void)%s;", cn, i, cn);
         } else {
@@ -1642,6 +1663,7 @@ static void gen_stmts(G *g, Block *b) {
           const char *i = newtmp(g);
           emit(g, "for (int64_t %s = 0; %s < %s.len; %s++) {", i, i, l, i);
           g->indent++;
+          emit(g, "yu_tick();");
           const char *cn = bind_new(g, s->name);
           emit(g, "%s %s = ((%s *)%s.p)[%s]; (void)%s;", ctype(g, s->ty), cn, ctype(g, s->ty), l, i, cn);
         }
@@ -1654,6 +1676,7 @@ static void gen_stmts(G *g, Block *b) {
       case S_WHILE: {
         emit(g, "for (;;) {");
         g->indent++;
+        emit(g, "yu_tick();");
         const char *c = gen_expr(g, s->value);
         emit(g, "if (!(%s)) break;", c);
         gen_block_into(g, s->body, NULL, NULL);

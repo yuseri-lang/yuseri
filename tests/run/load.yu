@@ -1,0 +1,33 @@
+// Load test server (tests/load_http.sh): a shared counter under parallel requests, and a
+// handler that never returns, stopped by the deadline.
+import std.http
+
+fn handle(req: Request, hits: Store<Int>) -> Response {
+  match "{req.method} {req.path}" {
+    "POST /hit" => {
+      let n = hits.update(fn(v: Int) -> Int { v + 1 })
+      http.response(200, "{n}")
+    }
+    "GET /count" => http.response(200, "{hits.get()}")
+    "GET /slow" => {
+      var i = 0
+      while true { i = i + 1 }
+      http.response(200, "{i}")
+    }
+    _ => http.response(404, "not found")
+  }
+}
+
+fn main(sys: System) -> Unit {
+  let hits = Store.new(0)
+  let opts = Serve { port: 8080, deadline_ms: 500, workers: None }
+  http.serve_with(sys.net, opts, fn(req: Request) -> Response { handle(req, hits) })
+}
+
+test "hits count up" {
+  let hits = Store.new(0)
+  assert_eq(handle(http.request("POST", "/hit", ""), hits).body, "1")
+  assert_eq(handle(http.request("POST", "/hit", ""), hits).body, "2")
+  assert_eq(handle(http.request("GET", "/count", ""), hits).body, "2")
+  assert_eq(handle(http.request("GET", "/nope", ""), hits).status, 404)
+}

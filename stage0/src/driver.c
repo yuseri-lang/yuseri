@@ -94,7 +94,7 @@ const char *driver_build(Arena *a, const char *src_path, const char *out_path, b
   const char *cc = getenv("CC");
   if (!cc || !*cc) cc = "cc";
   Buf cmd = {0};
-  buf_printf(&cmd, "%s -std=c11 -O1 -g -w -I'%s' -I'%s/../src' -o '%s' '%s' '%s'/*.c -lm", cc, rt, rt, exe.p, cpath.p, rt);
+  buf_printf(&cmd, "%s -std=c11 -O1 -g -w -I'%s' -I'%s/../src' -o '%s' '%s' '%s'/*.c -lm -lpthread", cc, rt, rt, exe.p, cpath.p, rt);
   int rc = system(cmd.p);
   buf_free(&cmd);
   buf_free(&cpath);

@@ -3,7 +3,9 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <signal.h>
+#include <stdatomic.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 static yu_map str_map(void) { return yu_map_new(1, sizeof(yu_str)); }
@@ -207,7 +209,67 @@ int yu_http_read_request(int fd, yu_http_request *req) {
   return 0;
 }
 
-void yu_http_serve(void *net, int64_t port, yu_http_handler h) {
+// ---- the server: N workers, one request at a time each ----------------------------------
+
+typedef struct { int listen_fd; yu_http_handler h; int64_t deadline_ms; } Server;
+static _Atomic int64_t g_counter = 0;  // request ids are unique across workers
+
+static void socket_timeout(int fd, int64_t ms) {
+  if (ms <= 0) ms = 1;
+  struct timeval tv = {(time_t)(ms / 1000), (suseconds_t)((ms % 1000) * 1000)};
+  setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+  setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
+}
+
+// Handles one connection on the calling worker's arena. Everything from reading the request
+// to the handler's return runs under the deadline and inside one catch: a failure anywhere
+// answers 500 and the worker carries on.
+static void handle_connection(Server *sv, int fd, yu_arena *mine) {
+  yu_arena_mark mark = yu_arena_mark_now();
+  yu_deadline_set(yu_now_ms() + sv->deadline_ms, sv->deadline_ms);
+  socket_timeout(fd, sv->deadline_ms);
+  char idbuf[32];
+  snprintf(idbuf, sizeof idbuf, "req-%lld", (long long)(++g_counter));
+  yu_request_id = yu_str_lit(idbuf, (int64_t)strlen(idbuf));
+  yu_http_request req;
+  yu_http_response res;
+  int status;  // 0 = handled, else the status to answer with
+  if (yu_catch_begin()) {
+    status = yu_http_read_request(fd, &req);
+    if (status == 0) {
+      req.f_id = dup_str(yu_request_id);
+      res = sv->h.fn(sv->h.env, req);
+    }
+    yu_catch_end();
+  } else {
+    // a panic, runtime error or R-TIME-01: the error line is already printed
+    yu_arena_use(mine);
+    status = 500;
+  }
+  yu_deadline_set(0, 0);  // the answer itself is not under the deadline
+  if (status == 500) res = yu_http_response_text(500, yu_str_lit("internal error", 14));
+  else if (status == 413) res = yu_http_response_text(413, yu_str_lit("request too large", 17));
+  else if (status != 0) res = yu_http_response_text(status, yu_str_lit("bad request", 11));
+  send_response(fd, res);
+  close(fd);
+  yu_request_id = yu_str_lit("main", 4);
+  yu_arena_release(mark);
+}
+
+static void *worker_main(void *arg) {
+  Server *sv = arg;
+  yu_arena *mine = yu_arena_new();
+  yu_arena_use(mine);
+  yu_serving = true;
+  for (;;) {
+    int fd = accept(sv->listen_fd, NULL, NULL);
+    if (fd < 0) continue;
+    handle_connection(sv, fd, mine);
+  }
+  return NULL;
+}
+
+void yu_http_serve(void *net, int64_t port, yu_http_handler h, int64_t deadline_ms, int64_t workers) {
   (void)net;  // the capability is proof of permission; nothing to read from it yet
   signal(SIGPIPE, SIG_IGN);
   int s = socket(AF_INET, SOCK_STREAM, 0);
@@ -219,33 +281,24 @@ void yu_http_serve(void *net, int64_t port, yu_http_handler h) {
   addr.sin_addr.s_addr = htonl(INADDR_ANY);
   addr.sin_port = htons((uint16_t)port);
   if (bind(s, (struct sockaddr *)&addr, sizeof addr) < 0) yu_fail("R-HTTP-01", "std.http", "cannot bind port %lld", (long long)port);
-  if (listen(s, 16) < 0) yu_fail("R-HTTP-01", "std.http", "cannot listen on port %lld", (long long)port);
-  fprintf(stderr, "yuseri: listening on port %lld\n", (long long)port);
-  int64_t counter = 0;
-  for (;;) {
-    int fd = accept(s, NULL, NULL);
-    if (fd < 0) continue;
-    yu_arena_mark mark = yu_arena_mark_now();
-    yu_http_request req;
-    int status = yu_http_read_request(fd, &req);
-    if (status != 0) {
-      send_response(fd, yu_http_response_text(status, status == 413 ? yu_str_lit("request too large", 17) : yu_str_lit("bad request", 11)));
-    } else {
-      char idbuf[32];
-      snprintf(idbuf, sizeof idbuf, "req-%lld", (long long)++counter);
-      req.f_id = dup_str(yu_str_lit(idbuf, (int64_t)strlen(idbuf)));
-      yu_request_id = req.f_id;
-      yu_http_response res;
-      if (yu_catch_begin()) {
-        res = h.fn(h.env, req);
-        yu_catch_end();
-      } else {
-        // a panic or runtime error inside the handler: the error line is already printed
-        res = yu_http_response_text(500, yu_str_lit("internal error", 14));
-      }
-      send_response(fd, res);
-    }
-    close(fd);
-    yu_arena_release(mark);
+  if (listen(s, 128) < 0) yu_fail("R-HTTP-01", "std.http", "cannot listen on port %lld", (long long)port);
+  if (workers <= 0) {
+    long n = sysconf(_SC_NPROCESSORS_ONLN);
+    workers = n > 0 ? n : 1;
   }
+  if (workers > 256) workers = 256;
+  if (deadline_ms <= 0) deadline_ms = YU_HTTP_DEFAULT_DEADLINE_MS;
+  Server *sv = calloc(1, sizeof *sv);
+  sv->listen_fd = s;
+  sv->h = h;
+  sv->deadline_ms = deadline_ms;
+  fprintf(stderr, "yuseri: listening on port %lld, %lld worker%s, %lld ms deadline\n", (long long)port, (long long)workers, workers == 1 ? "" : "s", (long long)deadline_ms);
+  pthread_attr_t attr;
+  pthread_attr_init(&attr);
+  pthread_attr_setstacksize(&attr, 8 * 1024 * 1024);  // the same room as the main thread
+  pthread_t *threads = calloc((size_t)workers, sizeof *threads);
+  for (int64_t i = 0; i < workers; i++) {
+    if (pthread_create(&threads[i], &attr, worker_main, sv) != 0) yu_fail("R-HTTP-01", "std.http", "cannot start worker %lld", (long long)i);
+  }
+  for (int64_t i = 0; i < workers; i++) pthread_join(threads[i], NULL);  // never returns
 }

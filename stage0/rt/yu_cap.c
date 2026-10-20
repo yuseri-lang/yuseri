@@ -2,6 +2,8 @@
 
 #include <sys/time.h>
 
+static pthread_mutex_t g_capture_mu = PTHREAD_MUTEX_INITIALIZER;
+
 yu_system yu_system_new(void) {
   yu_system s;
   s.f_net = yu_alloc(sizeof *s.f_net); s.f_net->real = true;
@@ -59,7 +61,9 @@ void yu_log_write(yu_log *l, const char *level, yu_str msg) {
   yu_sb_str(&b, msg);
   yu_str line = yu_sb_finish(&b);
   if (l->capture) {
-    // captured lines must outlive the request that wrote them: keep them in the main arena
+    // captured lines must outlive the request that wrote them: keep them in the main arena,
+    // which workers otherwise never write to, so the push is serialized
+    pthread_mutex_lock(&g_capture_mu);
     yu_arena *prev = yu_arena_use(NULL);
     yu_str kept = {NULL, line.len};
     uint8_t *p = yu_alloc((size_t)line.len + 1);
@@ -67,9 +71,10 @@ void yu_log_write(yu_log *l, const char *level, yu_str msg) {
     kept.p = p;
     yu_list_push(&l->lines, &kept, sizeof(yu_str));
     yu_arena_use(prev);
+    pthread_mutex_unlock(&g_capture_mu);
     return;
   }
-  fprintf(stderr, "%.*s\n", (int)line.len, (const char *)line.p);
+  fprintf(stderr, "%.*s\n", (int)line.len, (const char *)line.p);  // one call per line
 }
 
 yu_log *yu_log_capture(void) {
@@ -81,5 +86,8 @@ yu_log *yu_log_capture(void) {
 
 yu_list yu_log_lines(yu_log *l) {
   if (!l->capture) return yu_list_new(sizeof(yu_str));
-  return yu_list_copy(l->lines, sizeof(yu_str));
+  pthread_mutex_lock(&g_capture_mu);
+  yu_list copy = yu_list_copy(l->lines, sizeof(yu_str));
+  pthread_mutex_unlock(&g_capture_mu);
+  return copy;
 }

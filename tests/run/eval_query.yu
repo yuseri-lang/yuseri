@@ -1,0 +1,59 @@
+enum QueryError { MalformedPair(pair: String), EmptyKey(pair: String) }
+
+fn parse_query(s: String) -> Result<Map<String, String>, QueryError> {
+  var m = Map<String, String>()
+  if s.is_empty() { return Ok(m) }
+  for pair in s.split("&") {
+    let kv = pair.split("=")
+    if kv.len() != 2 { return Err(QueryError.MalformedPair(pair: pair)) }
+    let key = kv[0]   // ASSUMED: `xs[i]` is the read syntax and yields T (the spec only mentions `xs[i]` out of range in 15)
+    let value = kv[1]
+    if key.is_empty() { return Err(QueryError.EmptyKey(pair: pair)) }
+    m.set(key, value)
+  }
+  Ok(m)
+}
+
+test "parse_query: normal input" {
+  match parse_query("a=1&b=two") {
+    Ok(m) => {
+      assert_eq(m.len(), 2)
+      assert_eq(m.get("a"), Some("1"))
+      assert_eq(m.get("b"), Some("two"))
+    }
+    Err(_) => assert(false)
+  }
+}
+
+test "parse_query: empty input" {
+  match parse_query("") {
+    Ok(m) => assert_eq(m.len(), 0)
+    Err(_) => assert(false)
+  }
+}
+
+test "parse_query: pair without equals" {
+  assert_eq(parse_query("a=1&b"), Err(QueryError.MalformedPair(pair: "b")))
+}
+
+test "parse_query: pair with more than one equals" {
+  assert_eq(parse_query("a=1=2"), Err(QueryError.MalformedPair(pair: "a=1=2")))
+}
+
+test "parse_query: empty key" {
+  assert_eq(parse_query("=1"), Err(QueryError.EmptyKey(pair: "=1")))
+}
+
+test "parse_query: empty pair between separators" {
+  assert_eq(parse_query("a=1&&b=2"), Err(QueryError.MalformedPair(pair: "")))
+}
+
+test "parse_query: duplicate key keeps last value" {
+  match parse_query("a=1&a=2") {
+    Ok(m) => {
+      assert_eq(m.len(), 1)
+      assert_eq(m.get("a"), Some("2"))
+    }
+    Err(_) => assert(false)
+  }
+}

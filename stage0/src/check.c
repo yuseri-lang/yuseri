@@ -24,6 +24,7 @@ typedef struct FnCtx {
   Str name;
   int depth;
   struct FnCtx *outer;
+  Expr *fn_expr;  // the E_FN for an anonymous function, NULL for a declaration
 } FnCtx;
 
 typedef struct {
@@ -93,12 +94,22 @@ static Sym *find_sym(C *c, Str name) {
 }
 
 // Resolves a local name for reading; reports captured `var`s inside anonymous functions.
+static void record_capture(C *c, Expr *fn, Sym *y) {
+  for (int i = 0; i < fn->cap_names.len; i++) if (str_eq(fn->cap_names.items[i], y->name)) return;
+  VEC_PUSH(c->a, &fn->cap_names, y->name);
+  VEC_PUSH(c->a, &fn->cap_types, y->type);
+}
+
 static Sym *use_sym(C *c, Str name, int line) {
   Sym *y = find_sym(c, name);
   if (!y) return NULL;
   y->used = true;
-  if (c->fn && y->fn_depth < c->fn->depth && y->mutable)
-    ERR(c, "E-BIND-03", line, "anonymous function captures var %s", cstr(c, name));
+  if (c->fn && y->fn_depth < c->fn->depth) {
+    if (y->mutable) ERR(c, "E-BIND-03", line, "anonymous function captures var %s", cstr(c, name));
+    // every anonymous function between the use and the declaring function captures it
+    for (FnCtx *f = c->fn; f && f->depth > y->fn_depth; f = f->outer)
+      if (f->fn_expr) record_capture(c, f->fn_expr, y);
+  }
   return y;
 }
 
@@ -385,9 +396,10 @@ static bool pat_irrefutable(Pattern *p) {
 }
 
 static void check_pattern(C *c, Pattern *p, Ty *t) {
+  p->ty = t;
   switch (p->kind) {
     case PAT_WILD: return;
-    case PAT_BIND: define(c, p->name, t, false, p->line, false); return;
+    case PAT_BIND: p->ty = t; define(c, p->name, t, false, p->line, false); return;
     case PAT_LIT: {
       Ty *lt = infer(c, p->lit, NULL);
       if (!ty_eq(lt, t)) ERR(c, "E-TYPE-01", p->line, "pattern has type %s, value has type %s", tstr(c, lt), tstr(c, t));
@@ -680,12 +692,17 @@ static Ty *infer_fn_expr(C *c, Expr *e) {
   Ty *ret = e->ret ? resolve_type(c, e->ret) : ty_prim(TY_ERR);
   TyVec ps = {0};
   for (int i = 0; i < e->params.len; i++) { Ty *t = resolve_type(c, e->params.items[i].type); VEC_PUSH(c->a, &ps, t); }
-  FnCtx fx = {.ret = ret, .name = STR_LIT("anonymous fn"), .depth = c->fn ? c->fn->depth + 1 : 1, .outer = c->fn};
+  static int next_fn_id = 1;
+  e->id = next_fn_id++;
+  FnCtx fx = {.ret = ret, .name = STR_LIT("anonymous fn"), .depth = c->fn ? c->fn->depth + 1 : 1, .outer = c->fn, .fn_expr = e};
   c->fn = &fx;
   int saved_loops = c->loop_depth;
   c->loop_depth = 0;
   push_scope(c);
-  for (int i = 0; i < e->params.len; i++) define(c, e->params.items[i].name, ps.items[i], false, e->params.items[i].line, true);
+  for (int i = 0; i < e->params.len; i++) {
+    e->params.items[i].ty = ps.items[i];
+    define(c, e->params.items[i].name, ps.items[i], false, e->params.items[i].line, true);
+  }
   Ty *bt = check_block(c, e->block, ret->kind == TY_UNIT ? NULL : ret);
   if (ret->kind != TY_UNIT && !ty_eq(bt, ret)) ERR(c, "E-TYPE-01", e->line, "anonymous fn returns %s, body has type %s", tstr(c, ret), tstr(c, bt));
   pop_scope(c);
@@ -694,7 +711,15 @@ static Ty *infer_fn_expr(C *c, Expr *e) {
   return ty_fn(c->a, ps, ret);
 }
 
+static Ty *infer_inner(C *c, Expr *e, Ty *expected);
+
 static Ty *infer(C *c, Expr *e, Ty *expected) {
+  Ty *t = infer_inner(c, e, expected);
+  e->ty = t;
+  return t;
+}
+
+static Ty *infer_inner(C *c, Expr *e, Ty *expected) {
   Arena *a = c->a;
   switch (e->kind) {
     case E_INT: return ty_prim(TY_INT);
@@ -711,11 +736,11 @@ static Ty *infer(C *c, Expr *e, Ty *expected) {
         return ty_prim(TY_ERR);
       }
       Sym *y = use_sym(c, e->text, e->line);
-      if (y) return y->type;
+      if (y) { e->call_kind = CK_VALUE; return y->type; }
       Decl *f = find_decl(&c->fns, e->text);
-      if (f) return fn_type(c, f, NULL);
+      if (f) { e->call_kind = CK_FN; return fn_type(c, f, NULL); }
       Decl *k = find_decl(&c->consts, e->text);
-      if (k) return resolve_type(c, k->ret);
+      if (k) { e->call_kind = CK_STATIC; return resolve_type(c, k->ret); }
       if (is_type_name(c, e->text)) { ERR(c, "E-NAME-01", e->line, "%s is a type, not a value", cstr(c, e->text)); return ty_prim(TY_ERR); }
       ERR(c, "E-NAME-01", e->line, "unknown name %s", cstr(c, e->text));
       return ty_prim(TY_ERR);
@@ -820,6 +845,7 @@ static Ty *infer_call(C *c, Expr *e, Ty *expected) {
   // 1. plain name: prelude, user function, or a local function value
   if (f->kind == E_IDENT && !find_sym(c, f->text)) {
     Str n = f->text;
+    e->call_kind = CK_PRELUDE;
     if (str_eq_c(n, "Some")) {
       check_arg_count(c, e, 1, "Some");
       Ty *x = arg_or_err(c, e, 0, expected && expected->kind == TY_OPTION ? expected->a : NULL);
@@ -848,9 +874,11 @@ static Ty *infer_call(C *c, Expr *e, Ty *expected) {
     if (str_eq_c(n, "panic")) { check_arg_count(c, e, 1, "panic"); arg_or_err(c, e, 0, ty_prim(TY_STRING)); return ty_prim(TY_NEVER); }
     Decl *d = find_decl(&c->fns, n);
     if (d) {
+      e->call_kind = CK_FN;
       Ty *ft = fn_type(c, d, NULL);
       return call_fn_type(c, e, ft, d->generics.len ? &d->generics : NULL, cstr(c, n));
     }
+    e->call_kind = CK_UNKNOWN;
     if (find_decl(&c->structs, n)) { ERR(c, "E-SYN-01", e->line, "structs are built with %s { field: value }", cstr(c, n)); return ty_prim(TY_ERR); }
     ERR(c, "E-NAME-01", e->line, "unknown function %s", cstr(c, n));
     for (int i = 0; i < e->args.len; i++) infer(c, e->args.items[i], NULL);
@@ -859,6 +887,7 @@ static Ty *infer_call(C *c, Expr *e, Ty *expected) {
   // 2. Type.name(...): static functions and enum variant constructors
   if (f->kind == E_FIELD && f->a->kind == E_IDENT && !find_sym(c, f->a->text)) {
     Str tn = f->a->text, fnm = f->text;
+    e->call_kind = CK_STATIC;
     if (str_eq_c(tn, "Int") && str_eq_c(fnm, "parse")) { check_arg_count(c, e, 1, "Int.parse"); arg_or_err(c, e, 0, ty_prim(TY_STRING)); return ty_result(a, ty_prim(TY_INT), ty_named(a, TY_ENUM, STR_LIT("ParseError"), NULL)); }
     if (str_eq_c(tn, "Float") && str_eq_c(fnm, "from")) { check_arg_count(c, e, 1, "Float.from"); arg_or_err(c, e, 0, ty_prim(TY_INT)); return ty_prim(TY_FLOAT); }
     if (str_eq_c(tn, "String") && str_eq_c(fnm, "from")) {
@@ -869,6 +898,7 @@ static Ty *infer_call(C *c, Expr *e, Ty *expected) {
     }
     Decl *en = find_decl(&c->enums, tn);
     if (en) {
+      e->call_kind = CK_VARIANT;
       Variant *v = enum_variant(en, fnm);
       if (!v) { ERR(c, "E-NAME-01", e->line, "%s has no variant %s", cstr(c, tn), cstr(c, fnm)); return ty_prim(TY_ERR); }
       Ty *et = ty_named(a, TY_ENUM, tn, en);
@@ -894,11 +924,14 @@ static Ty *infer_call(C *c, Expr *e, Ty *expected) {
     Ty *recv = infer(c, f->a, NULL);
     if (ty_is_err(recv)) { for (int i = 0; i < e->args.len; i++) infer(c, e->args.items[i], NULL); return recv; }
     bool found;
+    e->call_kind = CK_BUILTIN;
     Ty *r = builtin_method(c, recv, f->text, e, expected, &found);
     if (found) return r;
     if (recv->kind == TY_STRUCT || recv->kind == TY_ENUM) {
       Decl *m = find_method(c, recv->name, f->text);
       if (m) {
+        e->call_kind = CK_METHOD;
+        e->method = m;
         Ty *ft = fn_type(c, m, recv);
         if (ft->params.len == 0 || !str_eq_c(m->params.items[0].name, "self")) { ERR(c, "E-TYPE-06", e->line, "%s.%s has no self and cannot be called as a method", tstr(c, recv), cstr(c, f->text)); return ft->ret; }
         TyVec rest = {0};
@@ -916,6 +949,7 @@ static Ty *infer_call(C *c, Expr *e, Ty *expected) {
     return ty_prim(TY_ERR);
   }
   // 4. any other callee: must have a function type
+  e->call_kind = CK_VALUE;
   Ty *ft = infer(c, f, NULL);
   if (ty_is_err(ft)) { for (int i = 0; i < e->args.len; i++) infer(c, e->args.items[i], NULL); return ft; }
   if (ft->kind != TY_FN) { ERR(c, "E-TYPE-01", e->line, "%s is not a function", tstr(c, ft)); return ty_prim(TY_ERR); }
@@ -933,6 +967,7 @@ static void check_stmt(C *c, Stmt *s) {
   switch (s->kind) {
     case S_LET: {
       Ty *t = infer(c, s->value, NULL);
+      s->ty = t;
       define(c, s->name, t, s->mutable, s->line, false);
       break;
     }
@@ -966,6 +1001,7 @@ static void check_stmt(C *c, Stmt *s) {
         else if (it->kind == TY_MAP) ERR(c, "E-TYPE-01", s->line, "iterate a Map with entries()");
         else ERR(c, "E-TYPE-01", s->line, "for needs a range or a List, got %s", tstr(c, it));
       }
+      s->ty = elem;
       push_scope(c);
       define(c, s->name, elem, false, s->line, false);
       c->loop_depth++;
@@ -1020,8 +1056,10 @@ static void check_fn_body(C *c, Decl *d, Ty *self_type) {
       if (self_type && i == 0) t = self_type;
       else { ERR(c, "E-TYPE-03", p->line, "missing type on parameter %s", cstr(c, p->name)); t = ty_prim(TY_ERR); }
     } else t = resolve_type(c, p->type);
+    p->ty = t;
     define(c, p->name, t, false, p->line, true);
   }
+  d->ty = fn_type(c, d, self_type);
   Ty *bt = check_block(c, d->body, ret->kind == TY_UNIT ? NULL : ret);
   if (!ty_is_err(ret) && ret->kind != TY_UNIT) {
     Stmt *lastst = d->body->stmts.len ? d->body->stmts.items[d->body->stmts.len - 1] : NULL;
@@ -1041,14 +1079,14 @@ static void check_type_decl(C *c, Decl *d) {
     for (int i = 0; i < d->params.len; i++) {
       for (int j = 0; j < i; j++)
         if (str_eq(d->params.items[j].name, d->params.items[i].name)) ERR(c, "E-NAME-02", d->params.items[i].line, "duplicate field %s", cstr(c, d->params.items[i].name));
-      resolve_type(c, d->params.items[i].type);
+      d->params.items[i].ty = resolve_type(c, d->params.items[i].type);
     }
   } else {
     for (int i = 0; i < d->variants.len; i++) {
       Variant *v = &d->variants.items[i];
       for (int j = 0; j < i; j++)
         if (str_eq(d->variants.items[j].name, v->name)) ERR(c, "E-NAME-02", v->line, "duplicate variant %s", cstr(c, v->name));
-      for (int k = 0; k < v->fields.len; k++) resolve_type(c, v->fields.items[k].type);
+      for (int k = 0; k < v->fields.len; k++) v->fields.items[k].ty = resolve_type(c, v->fields.items[k].type);
     }
   }
   c->generics = saved;
@@ -1089,6 +1127,7 @@ void check_module(Arena *a, Module *m) {
       case D_FN: check_fn_body(c, d, NULL); break;
       case D_CONST: {
         Ty *t = resolve_type(c, d->ret);
+        d->ty = t;
         if (d->value->kind != E_INT && d->value->kind != E_FLOAT && d->value->kind != E_BOOL && d->value->kind != E_STRING)
           ERR(c, "E-SYN-01", d->line, "const %s needs a literal value", cstr(c, d->name));
         check_expr(c, d->value, t);

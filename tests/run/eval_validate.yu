@@ -1,0 +1,41 @@
+struct User { id: Int, name: String, age: Int }
+
+enum ValidationError { InvalidId(id: Int), EmptyName, InvalidAge(age: Int) }
+
+fn validate(u: User) -> Result<User, ValidationError> {
+  if u.id <= 0 { return Err(ValidationError.InvalidId(id: u.id)) }
+  if u.name.is_empty() { return Err(ValidationError.EmptyName) }
+  if u.age < 0 || u.age > 150 { return Err(ValidationError.InvalidAge(age: u.age)) }   // ASSUMED: `||` binds looser than `<` / `>` (no precedence table in the spec)
+  Ok(u)
+}
+
+test "validate: valid user" {
+  let u = User { id: 1, name: "Ann", age: 30 }
+  assert_eq(validate(u), Ok(u))   // ASSUMED: `Ok(u)` is typed as Result<User, ValidationError> from the other argument of assert_eq<T>
+}
+
+test "validate: age boundaries 0 and 150 are valid" {
+  let low = User { id: 1, name: "Ann", age: 0 }
+  let high = User { id: 1, name: "Ann", age: 150 }
+  assert(validate(low).is_ok())
+  assert(validate(high).is_ok())
+}
+
+test "validate: id must be positive" {
+  let zero = User { id: 0, name: "Ann", age: 30 }
+  let negative = User { id: -5, name: "Ann", age: 30 }
+  assert_eq(validate(zero), Err(ValidationError.InvalidId(id: 0)))   // ASSUMED: `Err(...)` alone is typed from the other argument of assert_eq<T>
+  assert_eq(validate(negative), Err(ValidationError.InvalidId(id: -5)))
+}
+
+test "validate: name must not be empty" {
+  let u = User { id: 1, name: "", age: 30 }
+  assert_eq(validate(u), Err(ValidationError.EmptyName))
+}
+
+test "validate: age must be within 0..150" {
+  let too_young = User { id: 1, name: "Ann", age: -1 }
+  let too_old = User { id: 1, name: "Ann", age: 151 }
+  assert_eq(validate(too_young), Err(ValidationError.InvalidAge(age: -1)))
+  assert_eq(validate(too_old), Err(ValidationError.InvalidAge(age: 151)))
+}

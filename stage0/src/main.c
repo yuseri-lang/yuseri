@@ -1,5 +1,6 @@
 // Yuseri Stage 0: command line
 #include "check.h"
+#include "driver.h"
 #include "fmt.h"
 #include "lexer.h"
 #include "parser.h"
@@ -8,7 +9,10 @@ static int usage(void) {
   fprintf(stderr,
           "usage: yuseri fmt [--write] <file.yu>...   print (or rewrite) in canonical layout\n"
           "       yuseri check <file.yu>...           type-check and report every error; E-FMT-01 when not formatted\n"
-          "       yuseri parse <file.yu>...           parse only and report errors\n");
+          "       yuseri parse <file.yu>...           parse only and report errors\n"
+          "       yuseri build <file.yu> [-o <exe>]    compile to a native executable\n"
+          "       yuseri run <file.yu>                 build and run main\n"
+          "       yuseri test <file.yu>                build and run the test blocks\n");
   return 2;
 }
 
@@ -106,8 +110,23 @@ static int cmd_parse(int argc, char **argv) {
   return rc;
 }
 
+static int cmd_build(int argc, char **argv, int mode) {  // mode: 0 build, 1 run, 2 test
+  if (argc == 0) return usage();
+  const char *out = NULL;
+  if (argc >= 3 && strcmp(argv[1], "-o") == 0) out = argv[2];
+  Arena a = {0};
+  const char *exe = driver_build(&a, argv[0], out, mode == 2);
+  int rc = exe ? 0 : 1;
+  if (exe && mode != 0) rc = driver_run(exe);
+  arena_free(&a);
+  return rc;
+}
+
 int main(int argc, char **argv) {
   if (argc < 2) return usage();
+  if (strcmp(argv[1], "build") == 0) return cmd_build(argc - 2, argv + 2, 0);
+  if (strcmp(argv[1], "run") == 0) return cmd_build(argc - 2, argv + 2, 1);
+  if (strcmp(argv[1], "test") == 0) return cmd_build(argc - 2, argv + 2, 2);
   if (strcmp(argv[1], "fmt") == 0) return cmd_fmt(argc - 2, argv + 2);
   if (strcmp(argv[1], "check") == 0) return cmd_check(argc - 2, argv + 2);
   if (strcmp(argv[1], "parse") == 0) return cmd_parse(argc - 2, argv + 2);

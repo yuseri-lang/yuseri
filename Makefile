@@ -11,7 +11,7 @@ $(BIN): $(OBJ)
 	@mkdir -p build
 	$(CC) $(CFLAGS) -o $@ $(OBJ)
 
-build/%.o: stage0/src/%.c stage0/src/*.h stage0/src/errors.def
+build/%.o: stage0/src/%.c stage0/src/*.h stage0/src/errors.def stage0/rt/yu_rt.h
 	@mkdir -p build
 	$(CC) $(CFLAGS) -c -o $@ $<
 
@@ -21,6 +21,7 @@ debug: clean $(BIN)
 test: $(BIN)
 	sh tests/run_golden.sh
 	sh tests/run_errors.sh
+	sh tests/run_programs.sh
 	sh tests/check_errors.sh
 
 check-errors:

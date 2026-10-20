@@ -1,0 +1,9 @@
+ok   validate accepts and rejects
+ok   arithmetic and strings
+ok   lists, maps and methods
+ok   list values are copied
+R-ASSERT-01 tests/run/basics.yu:97 assert_eq failed: left 2, right 3; the test's expectation did not hold; fix the code or the test
+fail a failing test keeps the others running
+R-INT-02 tests/run/basics.yu:102 division by zero; test the divisor first and return `Err`
+fail runtime errors have ids
+6 tests, 2 failed

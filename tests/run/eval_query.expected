@@ -1,0 +1,8 @@
+ok   parse_query: normal input
+ok   parse_query: empty input
+ok   parse_query: pair without equals
+ok   parse_query: pair with more than one equals
+ok   parse_query: empty key
+ok   parse_query: empty pair between separators
+ok   parse_query: duplicate key keeps last value
+7 tests, 0 failed

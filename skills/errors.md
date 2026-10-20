@@ -61,6 +61,10 @@ Every error is one line: `<ID> <file>:<line> <message>; <fix hint>`. When a decl
 
 - **R-PANIC-01** panic: <message>. The request stopped at an impossible state. The trace lists the request id and `file:line` hops. Fix: if the state is possible, return `Err` instead of `panic`.
 
+## R-ASSERT: tests
+
+- **R-ASSERT-01** assertion failed: <expression>, or assert_eq failed: left <value>, right <value>. The test stops; other tests still run. Fix: the test's expectation did not hold; fix the code or the test.
+
 ## R-APP: application errors
 
 User code chooses its own `R-APP-NN` ids for `Err` values it logs (for example in a `log_line` function). They are not raised by the runtime. Keep one id per enum variant and list them in your module's README.

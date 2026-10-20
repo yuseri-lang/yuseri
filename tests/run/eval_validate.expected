@@ -1,0 +1,6 @@
+ok   validate: valid user
+ok   validate: age boundaries 0 and 150 are valid
+ok   validate: id must be positive
+ok   validate: name must not be empty
+ok   validate: age must be within 0..150
+5 tests, 0 failed

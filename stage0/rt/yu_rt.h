@@ -66,6 +66,7 @@ void yu_fail(const char *id, const char *loc, const char *fmt, ...) __attribute_
 // ---- deadlines (layer 2, runtime.md 5): checked on allocation, at every loop iteration and on I/O
 int64_t yu_now_ms(void);                        // monotonic milliseconds
 void yu_deadline_set(int64_t at_ms, int64_t len_ms);  // 0 = no deadline
+void yu_deadline_get(int64_t *at_ms, int64_t *len_ms);
 int64_t yu_deadline_remaining_ms(void);         // 0 when none or already passed
 void yu_deadline_check(void);                   // R-TIME-01 when passed
 extern _Thread_local uint32_t yu_ticks;
@@ -97,6 +98,10 @@ yu_str yu_str_to_lower(yu_str s);
 yu_str yu_str_slice(yu_str s, int64_t start, int64_t end, const char *loc);
 yu_list yu_str_chars(yu_str s);
 yu_bytes yu_str_bytes(yu_str s);
+// Copies the bytes into the current arena. Strings are shared freely inside one arena; a value
+// that moves between arenas (into or out of a Store) is relocated with these.
+yu_str yu_str_relocate(yu_str s);
+yu_bytes yu_bytes_relocate(yu_bytes b);
 yu_str yu_str_join(yu_str sep, yu_list parts);
 yu_str yu_str_repeat(yu_str s, int64_t n, const char *loc);
 bool yu_int_parse(yu_str s, int64_t *out);
@@ -133,6 +138,9 @@ extern _Thread_local yu_str yu_request_id;
 // Under http.serve every stderr line starts with the request id, error lines included, so one
 // grep for the id shows everything the request did. Tests print error lines as they are.
 extern _Thread_local bool yu_serving;
+// While a spawned task runs: the "file:line" of its spawn, pushed into a trace right after the
+// request id so an error inside the task still shows where it came from.
+extern _Thread_local const char *yu_task_loc;
 void yu_trace_add(yu_list *trace, const char *loc);
 
 // ---- tests and assertions

@@ -12,7 +12,8 @@ static const char *STD_HTTP_SRC =
     "struct Response { status: Int, headers: Map<String, String>, body: String }\n"
     "struct Serve { port: Int, deadline_ms: Int, workers: Option<Int> }\n";
 static const char *STD_SYSTEM_SRC =
-    "struct System { net: Net, fs: Fs, env: Env, clock: Clock, random: Random, log: Log, tasks: Tasks }\n";
+    "struct System { net: Net, fs: Fs, env: Env, clock: Clock, random: Random, log: Log, tasks: Tasks }\n"
+    "enum FsError { NotFound(path: String), Io(path: String, message: String) }\n";
 
 // ---- context -----------------------------------------------------------
 
@@ -416,10 +417,16 @@ static Ty *builtin_method(C *c, Ty *recv, Str name, Expr *call, Ty *expected, bo
       break;
     case TY_CAP: {
       bool is_clock = str_eq_c(recv->name, "Clock"), is_env = str_eq_c(recv->name, "Env"), is_log = str_eq_c(recv->name, "Log");
+      bool is_fs = str_eq_c(recv->name, "Fs"), is_random = str_eq_c(recv->name, "Random"), is_tasks = str_eq_c(recv->name, "Tasks");
+      Ty *fs_err = ty_named(a, TY_ENUM, STR_LIT("FsError"), find_decl(&c->enums, STR_LIT("FsError")));
       if (is_clock && method_is(name, "now")) { check_arg_count(c, call, 0, "now"); result = INT; }
       else if (is_env && method_is(name, "get")) { check_arg_count(c, call, 1, "get"); arg_or_err(c, call, 0, STRING); result = ty_option(a, STRING); }
       else if (is_log && (method_is(name, "info") || method_is(name, "error"))) { check_arg_count(c, call, 1, cstr(c, name)); arg_or_err(c, call, 0, STRING); result = UNIT; }
       else if (is_log && method_is(name, "lines")) { check_arg_count(c, call, 0, "lines"); result = ty_list(a, STRING); }
+      else if (is_fs && method_is(name, "read")) { check_arg_count(c, call, 1, "read"); arg_or_err(c, call, 0, STRING); result = ty_result(a, STRING, fs_err); }
+      else if (is_fs && method_is(name, "write")) { check_arg_count(c, call, 2, "write"); arg_or_err(c, call, 0, STRING); arg_or_err(c, call, 1, STRING); result = ty_result(a, UNIT, fs_err); }
+      else if (is_random && method_is(name, "int")) { check_arg_count(c, call, 1, "int"); arg_or_err(c, call, 0, INT); result = INT; }
+      else if (is_tasks && method_is(name, "spawn")) { check_arg_count(c, call, 1, "spawn"); TyVec ps = {0}; arg_or_err(c, call, 0, ty_fn(a, ps, UNIT)); result = UNIT; }
       else *found = false;
       break;
     }
@@ -1002,6 +1009,9 @@ static Ty *infer_call(C *c, Expr *e, Ty *expected) {
     if (str_eq_c(tn, "Clock") && str_eq_c(fnm, "fixed")) { check_arg_count(c, e, 1, "Clock.fixed"); arg_or_err(c, e, 0, ty_prim(TY_INT)); return ty_named(a, TY_CAP, STR_LIT("Clock"), NULL); }
     if (str_eq_c(tn, "Env") && str_eq_c(fnm, "of")) { check_arg_count(c, e, 1, "Env.of"); arg_or_err(c, e, 0, ty_map(a, ty_prim(TY_STRING), ty_prim(TY_STRING))); return ty_named(a, TY_CAP, STR_LIT("Env"), NULL); }
     if (str_eq_c(tn, "Log") && str_eq_c(fnm, "capture")) { check_arg_count(c, e, 0, "Log.capture"); return ty_named(a, TY_CAP, STR_LIT("Log"), NULL); }
+    if (str_eq_c(tn, "Fs") && str_eq_c(fnm, "memory")) { check_arg_count(c, e, 0, "Fs.memory"); return ty_named(a, TY_CAP, STR_LIT("Fs"), NULL); }
+    if (str_eq_c(tn, "Random") && str_eq_c(fnm, "seeded")) { check_arg_count(c, e, 1, "Random.seeded"); arg_or_err(c, e, 0, ty_prim(TY_INT)); return ty_named(a, TY_CAP, STR_LIT("Random"), NULL); }
+    if (str_eq_c(tn, "Tasks") && str_eq_c(fnm, "inline")) { check_arg_count(c, e, 0, "Tasks.inline"); return ty_named(a, TY_CAP, STR_LIT("Tasks"), NULL); }
     if (str_eq_c(tn, "Store") && str_eq_c(fnm, "new")) {
       check_arg_count(c, e, 1, "Store.new");
       Ty *vt = arg_or_err(c, e, 0, expected && expected->kind == TY_STORE ? expected->a : NULL);

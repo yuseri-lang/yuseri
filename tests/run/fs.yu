@@ -1,0 +1,36 @@
+// Fs: text files behind a capability; Fs.memory() stands in for the disk in tests.
+struct Settings { greeting: String }
+
+fn load(fs: Fs, path: String) -> Result<Settings, FsError> {
+  let text = fs.read(path)?
+  Ok(Settings { greeting: text.trim() })
+}
+
+fn save(fs: Fs, path: String, s: Settings) -> Result<Unit, FsError> {
+  fs.write(path, "{s.greeting}\n")
+}
+
+test "write then read" {
+  let fs = Fs.memory()
+  assert_eq(save(fs, "/etc/app.conf", Settings { greeting: "hi" }), Ok(Unit))
+  assert_eq(fs.read("/etc/app.conf"), Ok("hi\n"))
+  match load(fs, "/etc/app.conf") {
+    Ok(s) => assert_eq(s.greeting, "hi")
+    Err(_) => assert(false)
+  }
+  assert_eq(save(fs, "/etc/app.conf", Settings { greeting: "yo" }), Ok(Unit))
+  assert_eq(fs.read("/etc/app.conf"), Ok("yo\n"))
+}
+
+test "a missing file is NotFound with a trace" {
+  let fs = Fs.memory()
+  match load(fs, "/nope") {
+    Ok(_) => assert(false)
+    Err(e) => {
+      assert_eq(e, FsError.NotFound(path: "/nope"))
+      assert_eq(e.trace().len(), 3)
+      assert_eq(e.trace()[0], "a missing file is NotFound with a trace")
+    }
+  }
+  assert_eq("{fs}", "Fs")
+}

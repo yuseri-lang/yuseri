@@ -90,6 +90,15 @@ Every error is one line: `<ID> <file>:<line> <message>; <fix hint>`. When a decl
 
 - **R-TIME-01** the request passed its deadline (30 seconds unless `http.serve_with` sets another). The client gets `500` and the request's memory is freed. Fix: make the handler faster, or give `http.serve_with` a longer deadline.
 
+## R-TASK: spawned tasks
+
+- **R-TASK-01** a task started with `tasks.spawn` failed (its own error line comes first). Only the task stops; the response was already sent. A trace made inside a task starts with the request id, then the `spawn` site. Fix: handle the failing case inside the task, for example by writing an `Err` to a `Store`.
+- **R-TASK-02** one request spawned more than 64 tasks. Fix: batch the work into one task.
+
+## R-RAND: Random
+
+- **R-RAND-01** `random.int(max)` was called with `max <= 0`. Fix: check that max is positive before calling `random.int`.
+
 ## R-APP: application errors
 
 User code chooses its own `R-APP-NN` ids for `Err` values it logs (for example in a `log_line` function). They are not raised by the runtime. Keep one id per enum variant and list them in your module's README.

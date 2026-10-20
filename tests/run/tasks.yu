@@ -1,0 +1,32 @@
+// Tasks: spawn runs after the response (here: at once, with Tasks.inline). A task writes its
+// result to a Store; a failing task prints its error and R-TASK-01 and the caller goes on.
+import std.http
+
+fn handle(req: Request, hits: Store<Int>, tasks: Tasks) -> Response {
+  let path = req.path
+  tasks.spawn(fn() -> Unit {
+    hits.update(fn(n: Int) -> Int { n + 1 })
+    let _ = path
+  })
+  http.response(202, "queued {path}")
+}
+
+fn risky(tasks: Tasks, ok: Bool) -> Int {
+  tasks.spawn(fn() -> Unit { if !ok { panic("task boom") } })
+  7
+}
+
+test "a task updates a store" {
+  let hits = Store.new(0)
+  let tasks = Tasks.inline()
+  assert_eq(handle(http.request("GET", "/a", ""), hits, tasks).body, "queued /a")
+  assert_eq(handle(http.request("GET", "/b", ""), hits, tasks).status, 202)
+  assert_eq(hits.get(), 2)
+}
+
+test "a failing task does not stop the caller" {
+  let tasks = Tasks.inline()
+  assert_eq(risky(tasks, true), 7)
+  assert_eq(risky(tasks, false), 7)
+  assert_eq("{tasks}", "Tasks")
+}

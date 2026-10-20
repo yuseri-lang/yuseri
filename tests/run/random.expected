@@ -1,0 +1,5 @@
+ok   values stay in range
+ok   the same seed gives the same sequence
+R-RAND-01 tests/run/random.yu:27 random.int needs max > 0, got 0; check that max is positive before calling `random.int`
+fail max of zero is R-RAND-01
+3 tests, 1 failed

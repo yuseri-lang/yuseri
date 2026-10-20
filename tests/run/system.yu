@@ -1,0 +1,50 @@
+// Capabilities: the outside world is passed in from main(sys: System); tests use doubles
+import std.http
+
+struct Config { greeting: String }
+
+fn load_config(env: Env) -> Config {
+  Config { greeting: env.get("GREETING").unwrap_or("hello") }
+}
+
+fn handle(req: Request, cfg: Config, clock: Clock, log: Log) -> Response {
+  let t = clock.now()
+  log.info("{req.method} {req.path} at {t}")
+  match req.path {
+    "/time" => http.response(200, "{t}")
+    "/greet" => http.response(200, "{cfg.greeting} {req.query.get("name").unwrap_or("you")}")
+    _ => {
+      log.error("no route for {req.path}")
+      http.response(404, "not found")
+    }
+  }
+}
+
+fn main(sys: System) -> Unit {
+  let cfg = load_config(sys.env)
+  http.serve(sys.net, 8080, fn(req: Request) -> Response { handle(req, cfg, sys.clock, sys.log) })
+}
+
+test "doubles stand in for the world" {
+  var vars = Map<String, String>()
+  vars.set("GREETING", "hi")
+  let cfg = load_config(Env.of(vars))
+  assert_eq(cfg.greeting, "hi")
+  assert_eq(load_config(Env.of(Map<String, String>())).greeting, "hello")
+  let clock = Clock.fixed(1700000000000)
+  let log = Log.capture()
+  assert_eq(handle(http.request("GET", "/time", ""), cfg, clock, log).body, "1700000000000")
+  assert_eq(handle(http.request("GET", "/greet?name=Ann", ""), cfg, clock, log).body, "hi Ann")
+  assert_eq(handle(http.request("GET", "/nope", ""), cfg, clock, log).status, 404)
+  let lines = log.lines()
+  assert_eq(lines.len(), 4)
+  assert_eq(lines[0], "doubles stand in for the world info GET /time at 1700000000000")
+  assert_eq(lines[3], "doubles stand in for the world error no route for /nope")
+  assert_eq("{clock}", "Clock")
+}
+
+test "a fixed clock does not move" {
+  let fixed = Clock.fixed(5)
+  assert_eq(fixed.now(), 5)
+  assert_eq(fixed.now(), 5)
+}

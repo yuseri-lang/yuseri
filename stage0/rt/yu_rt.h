@@ -121,6 +121,7 @@ int yu_test_run(const char *name, void (*fn)(void));
 int yu_test_summary(void);
 void yu_init(void);
 
+#include "yu_cap.h"
 #include "yu_http.h"
 #include "yu_json.h"
 

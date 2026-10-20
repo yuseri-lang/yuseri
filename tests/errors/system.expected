@@ -1,0 +1,4 @@
+E-CAP-01 tests/errors/system.yu:4 Clock holds a capability and cannot live in a Store; pass capabilities as parameters or capture them; never put them in a Store or compare them
+E-CAP-01 tests/errors/system.yu:6 Holder holds a capability and cannot live in a Store; pass capabilities as parameters or capture them; never put them in a Store or compare them
+E-CAP-01 tests/errors/system.yu:8 Clock is a capability and cannot be compared; pass capabilities as parameters or capture them; never put them in a Store or compare them
+E-TYPE-06 tests/errors/system.yu:10 main takes no parameters or one parameter sys: System; match the signature or struct definition in the named section

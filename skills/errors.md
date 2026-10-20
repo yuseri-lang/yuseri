@@ -55,6 +55,10 @@ Every error is one line: `<ID> <file>:<line> <message>; <fix hint>`. When a decl
 
 - **E-STORE-01** type cannot live in a Store (it contains a function, a Store or a capability). Fix: keep only plain data in a Store: structs, lists, maps, Int, Float, Bool, String, Option and enums.
 
+## E-CAP: capabilities
+
+- **E-CAP-01** a capability (`Net`, `Clock`, `Env`, `Log`, `Fs`, `Random`, `Tasks`) is stored in a Store, compared, or converted. Fix: pass capabilities as parameters or capture them; never put them in a Store or compare them.
+
 ## R-INT: integers
 
 - **R-INT-01** integer overflow. Fix: check the range before the operation, or use `Float`.

@@ -13,9 +13,9 @@ fn handle(req: Request, state: Store<Counter>) -> Response {
   http.response(200, "hit {now.hits}")
 }
 
-fn main() -> Unit {
+fn main(sys: System) -> Unit {
   let state = Store.new(Counter { hits: 0, names: [] })
-  http.serve(8080, fn(req: Request) -> Response { handle(req, state) })
+  http.serve(sys.net, 8080, fn(req: Request) -> Response { handle(req, state) })
 }
 
 test "state survives across requests" {
@@ -54,6 +54,22 @@ test "set replaces and update sees the latest value" {
   })
   assert_eq(tags.get(), ["a", "b"])
   assert_eq("{tags}", "Store")
+}
+
+enum StockError { Insufficient(have: Int) }
+
+fn take(stock: Store<Int>, n: Int) -> Result<Int, StockError> {
+  stock.try_update(fn(have: Int) -> Result<Int, StockError> {
+    if have < n { Err(StockError.Insufficient(have: have)) } else { Ok(have - n) }
+  })
+}
+
+test "update returns the new value and try_update is conditional" {
+  let n = Store.new(10)
+  assert_eq(n.update(fn(v: Int) -> Int { v + 5 }), 15)
+  assert_eq(take(n, 4), Ok(11))
+  assert_eq(take(n, 20), Err(StockError.Insufficient(have: 11)))
+  assert_eq(n.get(), 11)
 }
 
 // This test is expected to fail: a panic inside update stops the request after R-STORE-01.

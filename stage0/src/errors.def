@@ -23,6 +23,7 @@ X(E_STR_01, "E-STR-01", "write `\\{` or `\\}`, or use `{expr}` for interpolation
 X(E_FMT_01, "E-FMT-01", "run `yuseri fmt`")
 X(E_JSON_01, "E-JSON-01", "use structs, lists, Map<String, V>, Int, Float, Bool, String, Option and field-less enums only")
 X(E_STORE_01, "E-STORE-01", "keep only plain data in a Store: structs, lists, maps, Int, Float, Bool, String, Option and enums")
+X(E_CAP_01, "E-CAP-01", "pass capabilities as parameters or capture them; never put them in a Store or compare them")
 X(R_INT_01, "R-INT-01", "check the range before the operation, or use `Float`")
 X(R_INT_02, "R-INT-02", "test the divisor first and return `Err`")
 X(R_LIST_01, "R-LIST-01", "use `get(i)` and handle `None`, or check `len()` first")

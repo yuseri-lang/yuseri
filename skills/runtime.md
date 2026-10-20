@@ -12,12 +12,17 @@ Every value made while handling a request lives in that request's arena and is f
 ## 2. Store
 `Store<T>` is the one place that outlives requests. `T` is any Core value (struct, List, Map, Int, String, Option, enum) that holds no function, no `Store` and no capability (`E-STORE-01` otherwise).
 ```
-let users = Store.new(Map<Int, User>())
-let snapshot = users.get()                                  // a copy, yours for this request
-users.update(fn(m: Map<Int, User>) -> Map<Int, User> { ... })  // atomic replace
-users.set(Map<Int, User>())                                 // update with a constant
+let users = Store.new(Map<Int, User>())            // Store<Map<Int, User>>
+let snapshot = users.get()                        // T: a copy, yours for this request
+let after = users.update(fn(m: Map<Int, User>) -> Map<Int, User> { ... })  // T: atomic replace, returns the new value
+users.set(Map<Int, User>())                       // Unit: update with a constant
+let r = stock.try_update(fn(n: Int) -> Result<Int, StockError> {
+  if n < 1 { Err(StockError.Insufficient) } else { Ok(n - 1) }
+})                                                // Result<T, E>: Err leaves the value unchanged
 ```
-`get` copies; changing the copy changes nothing. `update` applies `f` to the current value and replaces it; other requests see either the old or the new value, never a mix. If `f` panics, the value stays; the panic line is followed by `R-STORE-01` and the request fails as any panic does. `update` copies the whole value, so keep stores small; large data belongs in a database.
+`get` copies; changing the copy changes nothing. `update` applies `f` to the current value, replaces it and returns the new value; other requests see either the old or the new value, never a mix. Use `try_update` when the change has a condition: checking with `get` and then calling `update` is not atomic across requests. If `f` panics, the value stays; the panic line is followed by `R-STORE-01` and the request fails as any panic does. `update` copies the whole value, so keep stores small; large data belongs in a database.
+
+Capabilities and stores are plain parameter types: `fn adjust(stock: Store<Map<String, Int>>, clock: Clock, log: Log) -> Response`.
 
 ## 3. System and capabilities
 ```
@@ -27,17 +32,17 @@ fn main(sys: System) -> Unit {
   http.serve(sys.net, 8080, fn(req: Request) -> Response { handle(req, hits, sys.clock) })
 }
 ```
-Only `main` receives `System`. Every other function takes the capabilities it needs as parameters; there is no global way to get one. Capabilities cannot be stored in a `Store` (`E-CAP-01`); they travel only through parameters and captures. So a signature tells you what a function can reach: `fn validate(u: User) -> Result<User, E>` cannot open a socket or read a file.
+Only `main` receives `System`. Every other function takes the capabilities it needs as parameters; there is no global way to get one. Capabilities cannot be stored in a `Store` or compared (`E-CAP-01`); they travel only through parameters and captures. So a signature tells you what a function can reach: `fn validate(u: User) -> Result<User, E>` cannot open a socket or read a file. Each capability is used through its methods (`clock.now()`), except `Net`, which `http.serve` takes as an argument.
 
 | Capability | Use | In tests |
 |---|---|---|
 | `Net` | `http.serve(net, port, handler)` | call the handler with `http.request(...)`; no `Net` needed |
-| `Clock` | `clock.now(clock) -> Int` (Unix milliseconds) | `Clock.fixed(1700000000000)` |
-| `Env` | `env.get(env, "PORT") -> Option<String>` | `Env.of(m)` from a `Map<String, String>` |
-| `Log` | `log.info(log, msg)`, `log.error(log, msg)`; the request id is prepended for you | `Log.capture()`, then `log.lines(l)` |
-| `Fs` | `fs.read(fs, path) -> Result<Bytes, FsError>`, `fs.write(fs, path, bytes)` | `Fs.memory()` |
-| `Random` | `random.int(random, max) -> Int` | `Random.seeded(42)` |
-| `Tasks` | `tasks.spawn(tasks, f)` (section 4) | `Tasks.inline()` runs `f` immediately |
+| `Clock` | `clock.now() -> Int` (Unix milliseconds) | `Clock.fixed(1700000000000) -> Clock` |
+| `Env` | `env.get("PORT") -> Option<String>` | `Env.of(m: Map<String, String>) -> Env` |
+| `Log` | `log.info(msg) -> Unit`, `log.error(msg) -> Unit`. Each line is `<request id> <level> <msg>`, e.g. `req-7 info GET /x -> 200`; in a test the request id is the test name | `Log.capture() -> Log`, then `log.lines() -> List<String>` |
+| `Fs` | `fs.read(path) -> Result<Bytes, FsError>`, `fs.write(path, bytes)` | `Fs.memory()` |
+| `Random` | `random.int(max) -> Int` | `Random.seeded(42)` |
+| `Tasks` | `tasks.spawn(f)` (section 4) | `Tasks.inline()` runs `f` immediately |
 
 A program that touches none of these has `fn main() -> Unit` (core.md 1) or no `main` at all.
 

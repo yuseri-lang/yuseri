@@ -140,7 +140,7 @@ fn first<T>(xs: List<T>) -> Option<T> { xs.get(0) }
 ```
 
 ## 19. Tests
-`test` blocks sit next to the code; `yuseri test` runs them. `assert(cond: Bool) -> Unit`, `assert_eq<T>(a: T, b: T) -> Unit`; a failed assert ends that test.
+`test` blocks sit next to the code; `yuseri test` runs them. `assert(cond: Bool) -> Unit`, `assert_eq<T>(a: T, b: T) -> Unit`; a failed assert ends that test. A test is not a function: no `?` inside, `match` the `Result` instead.
 ```
 test "add works" {
   assert_eq(add(2, 3), 5)

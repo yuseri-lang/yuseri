@@ -1,0 +1,5 @@
+ok   a task updates a store
+R-PANIC-01 tests/run/tasks.yu:15 panic: task boom; if the state is possible, return `Err` instead of `panic`
+R-TASK-01 tests/run/tasks.yu:15 spawned task failed; the task's own error line comes first; the response was already sent
+ok   a failing task does not stop the caller
+2 tests, 0 failed

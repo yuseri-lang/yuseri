@@ -159,6 +159,7 @@ int64_t yu_now_ms(void) {
 }
 
 void yu_deadline_set(int64_t at_ms, int64_t len_ms) { g_deadline_at = at_ms; g_deadline_len = len_ms; }
+void yu_deadline_get(int64_t *at_ms, int64_t *len_ms) { *at_ms = g_deadline_at; *len_ms = g_deadline_len; }
 
 int64_t yu_deadline_remaining_ms(void) {
   if (!g_deadline_at) return 0;
@@ -508,12 +509,19 @@ yu_list yu_map_entries(yu_map m, int64_t vsz, int64_t voff, int64_t esz) {
 
 _Thread_local yu_str yu_request_id = {(const uint8_t *)"main", 4};
 _Thread_local bool yu_serving = false;
+_Thread_local const char *yu_task_loc = NULL;
 
 // Copies the list first: enum values are copied by value, and two copies must never
 // write into the same buffer (a trace must show only the path this value took).
 void yu_trace_add(yu_list *trace, const char *loc) {
   *trace = yu_list_copy(*trace, sizeof(yu_str));
-  if (trace->len == 0) yu_list_push(trace, &yu_request_id, sizeof(yu_str));
+  if (trace->len == 0) {
+    yu_list_push(trace, &yu_request_id, sizeof(yu_str));
+    if (yu_task_loc) {  // inside a spawned task: the spawn site comes right after the request id
+      yu_str s = {(const uint8_t *)yu_task_loc, (int64_t)strlen(yu_task_loc)};
+      yu_list_push(trace, &s, sizeof(yu_str));
+    }
+  }
   yu_str l = {(const uint8_t *)loc, (int64_t)strlen(loc)};
   yu_list_push(trace, &l, sizeof(yu_str));
 }

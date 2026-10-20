@@ -1225,6 +1225,27 @@ static const char *gen_builtin(G *g, Expr *e) {
         emit(g, "yu_log_write(%s, \"%s\", %s);", cap, cs(g, name), msg);
         return "YU_UNIT";
       }
+      if (IS("int")) return sfmt(g, "yu_random_int(%s, %s, %s)", cap, gen_expr(g, e->args.items[0]), loc(g, e->line));
+      if (IS("spawn")) {
+        const char *f = gen_temp(g, e->args.items[0]);
+        emit(g, "yu_tasks_spawn(%s, (yu_task_fn)%s.fn, %s.env, %s);", cap, f, f, loc(g, e->line));
+        return "YU_UNIT";
+      }
+      if (IS("read") || IS("write")) {
+        // Result<String | Unit, FsError>: 0 ok, 1 NotFound(path), 2 Io(path, message)
+        const char *path = gen_temp(g, e->args.items[0]);
+        const char *r = newtmp(g), *st = newtmp(g), *msg = newtmp(g);
+        const char *et = ctype(g, t->b);
+        emit(g, "%s %s = {0}; yu_str %s = {0};", ctype(g, t), r, msg);
+        if (IS("read")) emit(g, "int %s = yu_fs_read(%s, %s, &%s.val, &%s);", st, cap, path, r, msg);
+        else {
+          const char *text = gen_temp(g, e->args.items[1]);
+          emit(g, "int %s = yu_fs_write(%s, %s, %s, &%s);", st, cap, path, text, msg);
+        }
+        emit(g, "if (%s == 0) %s.ok = true;", st, r);
+        emit(g, "else { %s e_ = { .tag = %s - 1 }; if (%s == 1) e_.u.v_NotFound.f_path = %s; else { e_.u.v_Io.f_path = %s; e_.u.v_Io.f_message = %s; } yu_trace_add(&e_.trace_, %s); %s.ok = false; %s.err = e_; }", et, st, st, path, path, msg, loc(g, e->line), r, r);
+        return r;
+      }
       break;
     }
     case TY_STORE: {
@@ -1567,6 +1588,9 @@ static const char *gen_call(G *g, Expr *e) {
       if (str_eq_c(tn, "Clock")) return sfmt(g, "yu_clock_fixed(%s)", gen_expr(g, e->args.items[0]));
       if (str_eq_c(tn, "Env")) return sfmt(g, "yu_env_of(%s)", gen_expr(g, e->args.items[0]));
       if (str_eq_c(tn, "Log")) return "yu_log_capture()";
+      if (str_eq_c(tn, "Fs")) return "yu_fs_memory()";
+      if (str_eq_c(tn, "Random")) return sfmt(g, "yu_random_seeded(%s)", gen_expr(g, e->args.items[0]));
+      if (str_eq_c(tn, "Tasks")) return "yu_tasks_inline()";
       if (str_eq_c(tn, "Store")) {
         Ty *T = t->a;
         const char *v = gen_value(g, e->args.items[0]);

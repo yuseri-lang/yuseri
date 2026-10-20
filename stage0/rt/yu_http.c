@@ -246,12 +246,20 @@ static void handle_connection(Server *sv, int fd, yu_arena *mine) {
     yu_arena_use(mine);
     status = 500;
   }
+  int64_t at, len;
+  yu_deadline_get(&at, &len);
   yu_deadline_set(0, 0);  // the answer itself is not under the deadline
   if (status == 500) res = yu_http_response_text(500, yu_str_lit("internal error", 14));
   else if (status == 413) res = yu_http_response_text(413, yu_str_lit("request too large", 17));
   else if (status != 0) res = yu_http_response_text(status, yu_str_lit("bad request", 11));
   send_response(fd, res);
   close(fd);
+  // spawned tasks run now: after the answer, under the same deadline, before the arena goes
+  if (status == 0) {
+    yu_deadline_set(at, len);
+    yu_tasks_run();
+    yu_deadline_set(0, 0);
+  }
   yu_request_id = yu_str_lit("main", 4);
   yu_arena_release(mark);
 }

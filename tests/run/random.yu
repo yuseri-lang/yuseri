@@ -1,0 +1,28 @@
+// Random: random.int(max) gives 0 <= n < max; Random.seeded(n) repeats the same sequence.
+fn roll(random: Random, sides: Int) -> Int { random.int(sides) + 1 }
+
+fn rolls(random: Random, count: Int, sides: Int) -> List<Int> {
+  var out = List<Int>()
+  for _ in 0..count { out.push(roll(random, sides)) }
+  out
+}
+
+test "values stay in range" {
+  let r = Random.seeded(1)
+  for v in rolls(r, 1000, 6) {
+    assert(v >= 1)
+    assert(v <= 6)
+  }
+  assert_eq(roll(Random.seeded(9), 1), 1)
+}
+
+test "the same seed gives the same sequence" {
+  assert_eq(rolls(Random.seeded(42), 20, 100), rolls(Random.seeded(42), 20, 100))
+  assert(rolls(Random.seeded(42), 20, 100) != rolls(Random.seeded(43), 20, 100))
+  assert_eq("{Random.seeded(1)}", "Random")
+}
+
+// This test is expected to fail: max must be positive.
+test "max of zero is R-RAND-01" {
+  let _ = Random.seeded(1).int(0)
+}

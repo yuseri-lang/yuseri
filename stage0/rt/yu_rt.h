@@ -66,6 +66,7 @@ void yu_fail(const char *id, const char *loc, const char *fmt, ...) __attribute_
 // ---- deadlines (layer 2, runtime.md 5): checked on allocation, at every loop iteration and on I/O
 int64_t yu_now_ms(void);                        // monotonic milliseconds
 void yu_deadline_set(int64_t at_ms, int64_t len_ms);  // 0 = no deadline
+void yu_deadline_get(int64_t *at_ms, int64_t *len_ms);
 int64_t yu_deadline_remaining_ms(void);         // 0 when none or already passed
 void yu_deadline_check(void);                   // R-TIME-01 when passed
 extern _Thread_local uint32_t yu_ticks;
@@ -133,6 +134,9 @@ extern _Thread_local yu_str yu_request_id;
 // Under http.serve every stderr line starts with the request id, error lines included, so one
 // grep for the id shows everything the request did. Tests print error lines as they are.
 extern _Thread_local bool yu_serving;
+// While a spawned task runs: the "file:line" of its spawn, pushed into a trace right after the
+// request id so an error inside the task still shows where it came from.
+extern _Thread_local const char *yu_task_loc;
 void yu_trace_add(yu_list *trace, const char *loc);
 
 // ---- tests and assertions

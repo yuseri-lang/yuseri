@@ -40,9 +40,9 @@ Only `main` receives `System`. Every other function takes the capabilities it ne
 | `Clock` | `clock.now() -> Int` (Unix milliseconds) | `Clock.fixed(1700000000000) -> Clock` |
 | `Env` | `env.get("PORT") -> Option<String>` | `Env.of(m: Map<String, String>) -> Env` |
 | `Log` | `log.info(msg) -> Unit`, `log.error(msg) -> Unit`. Each line is `<request id> <level> <msg>`, e.g. `req-7 info GET /x -> 200`; in a test the request id is the test name | `Log.capture() -> Log`, then `log.lines() -> List<String>` |
-| `Fs` | `fs.read(path) -> Result<Bytes, FsError>`, `fs.write(path, bytes)` | `Fs.memory()` |
-| `Random` | `random.int(max) -> Int` | `Random.seeded(42)` |
-| `Tasks` | `tasks.spawn(f)` (section 4) | `Tasks.inline()` runs `f` immediately |
+| `Fs` | `fs.read(path) -> Result<String, FsError>`, `fs.write(path, text) -> Result<Unit, FsError>` (text files; `enum FsError { NotFound(path: String), Io(path: String, message: String) }`) | `Fs.memory() -> Fs`, an empty in-memory disk |
+| `Random` | `random.int(max) -> Int`, uniform in `0..max` (`R-RAND-01` if `max <= 0`) | `Random.seeded(42) -> Random`, the same sequence every run |
+| `Tasks` | `tasks.spawn(f: fn() -> Unit) -> Unit` (section 4) | `Tasks.inline() -> Tasks` runs `f` immediately |
 
 A program that touches none of these has `fn main() -> Unit` (core.md 1) or no `main` at all.
 
@@ -50,10 +50,10 @@ A program that touches none of these has `fn main() -> Unit` (core.md 1) or no `
 ```
 sys.tasks.spawn(fn() -> Unit { notify(mailer, order) })
 ```
-Runs `f` after the response is sent, on its own arena. `f` sees only its captured `let` values (copied), `Store`s, and capabilities passed in. It returns nothing; write results to a `Store`. A failure inside `f` stops only that task and prints one error line with the original request id.
+Runs `f` after the response is sent, under the same request id and deadline. `f` sees only its captured `let` values (copied), `Store`s, and capabilities passed in. It returns nothing; write results to a `Store`. A failure inside `f` stops only that task: its error line is followed by `R-TASK-01` at the `spawn` site, and a trace made inside `f` starts with the request id and that site. At most 64 tasks per request (`R-TASK-02`).
 
 ## 5. Deadlines
 Every request has a deadline: 30 seconds with `http.serve`, or `deadline_ms` of `http.serve_with(net, Serve { port: 8080, deadline_ms: 5000, workers: None }, handler)`, which also sets the worker count (`None`: one per CPU). Past it, the next allocation, loop iteration or I/O fails with `R-TIME-01`, the client gets `500`, and the request's arena is freed. Spawned tasks inherit the deadline.
 
 ## 6. Errors
-`R-STORE-01` update function panicked (value unchanged, request failed). `R-STORE-02` same Store touched inside its update function. `R-TASK-01` a spawned task failed. `R-TIME-01` deadline passed. `E-STORE-01` type cannot live in a Store. `E-CAP-01` capability stored or copied. Under `http.serve` every stderr line, log or error, starts with the request id (`req-7 R-TIME-01 ...`); `e.trace()` continues across `spawn`.
+`R-STORE-01` update function panicked (value unchanged, request failed). `R-STORE-02` same Store touched inside its update function. `R-TASK-01` a spawned task failed. `R-TIME-01` deadline passed. `R-RAND-01` `random.int` with `max <= 0`. `E-STORE-01` type cannot live in a Store. `E-CAP-01` capability stored or copied. Under `http.serve` every stderr line, log or error, starts with the request id (`req-7 R-TIME-01 ...`); `e.trace()` continues across `spawn`.

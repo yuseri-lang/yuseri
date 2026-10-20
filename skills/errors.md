@@ -92,7 +92,7 @@ Every error is one line: `<ID> <file>:<line> <message>; <fix hint>`. When a decl
 
 ## R-TASK: spawned tasks
 
-- **R-TASK-01** a task started with `tasks.spawn` failed (its own error line comes first). Only the task stops; the response was already sent. Fix: handle the failing case inside the task, for example by writing an `Err` to a `Store`.
+- **R-TASK-01** a task started with `tasks.spawn` failed (its own error line comes first). Only the task stops; the response was already sent. A trace made inside a task starts with the request id, then the `spawn` site. Fix: handle the failing case inside the task, for example by writing an `Err` to a `Store`.
 - **R-TASK-02** one request spawned more than 64 tasks. Fix: batch the work into one task.
 
 ## R-RAND: Random

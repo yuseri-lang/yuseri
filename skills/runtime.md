@@ -1,28 +1,26 @@
 # Yuseri runtime (layer 2)
 
-Read after `core.md`. Three rules cover everything here:
+Read after `core.md`. Three rules:
 
-1. Values die with the request. State that must outlive a request goes in a `Store<T>`.
-2. The outside world comes from `System`. `main(sys: System)` receives it and hands parts of it (`sys.net`, `sys.clock`, ...) to the functions that need them. A function without such a parameter cannot touch that resource.
-3. You do not write concurrency. The runtime runs requests in parallel (one worker per CPU); the only thing you start by hand is `sys.tasks.spawn`.
+1. Values die with the request. State that outlives a request goes in a `Store<T>`.
+2. The outside world comes from `System`. `main(sys: System)` hands parts of it (`sys.net`, `sys.clock`, ...) to the functions that need them. A function without such a parameter cannot touch that resource.
+3. You do not write concurrency. Requests run in parallel (one worker per CPU); the only thing you start by hand is `sys.tasks.spawn`.
 
 ## 1. Lifetimes
-Every value made while handling a request lives in that request's arena and is freed when the response is sent. Nothing is freed by hand and nothing leaks across requests. Values `main` builds before `http.serve` live as long as the process; they are `let` values, so capturing them in the handler is safe. Mutable state that requests share goes in a `Store`. Each `test` block has its own arena.
+Every value made while handling a request lives in that request's arena and is freed with the response; nothing is freed by hand. Values `main` builds before `http.serve` live as long as the process and may be captured by the handler. Shared mutable state goes in a `Store`. Each `test` block has its own arena.
 
 ## 2. Store
-`Store<T>` is the one place that outlives requests. `T` is any Core value (struct, List, Map, Int, String, Option, enum) that holds no function, no `Store` and no capability (`E-STORE-01` otherwise).
+`Store<T>` holds any Core value with no function, `Store` or capability inside (`E-STORE-01`).
 ```
-let users = Store.new(Map<Int, User>())            // Store<Map<Int, User>>
-let snapshot = users.get()                        // T: a copy, yours for this request
+let users = Store.new(Map<Int, User>())   // Store<Map<Int, User>>
+let snapshot = users.get()               // T: a copy
 let after = users.update(fn(m: Map<Int, User>) -> Map<Int, User> { ... })  // T: atomic replace, returns the new value
-users.set(Map<Int, User>())                       // Unit: update with a constant
+users.set(Map<Int, User>())              // Unit
 let r = stock.try_update(fn(n: Int) -> Result<Int, StockError> {
   if n < 1 { Err(StockError.Insufficient) } else { Ok(n - 1) }
-})                                                // Result<T, E>: Err leaves the value unchanged
+})                                       // Result<T, E>: Err leaves the value unchanged
 ```
-`get` copies; changing the copy changes nothing. `update` applies `f` to the current value, replaces it and returns the new value; other requests see either the old or the new value, never a mix. Use `try_update` when the change has a condition: checking with `get` and then calling `update` is not atomic across requests. If `f` panics, the value stays; the panic line is followed by `R-STORE-01` and the request fails as any panic does. Inside `f`, do not touch the same Store (`R-STORE-02`). `update` copies the whole value, so keep stores small; large data belongs in a database.
-
-Capabilities and stores are plain parameter types: `fn adjust(stock: Store<Map<String, Int>>, clock: Clock, log: Log) -> Response`.
+Other requests see the old or the new value, never a mix. A change with a condition is `try_update`: `get` then `update` is not atomic. If `f` panics the value stays and the request fails (`R-STORE-01`); `f` must not touch the same Store (`R-STORE-02`). `update` copies the whole value, so keep stores small. Stores and capabilities are plain parameter types: `fn adjust(stock: Store<Int>, log: Log) -> Response`.
 
 ## 3. System and capabilities
 ```
@@ -32,28 +30,19 @@ fn main(sys: System) -> Unit {
   http.serve(sys.net, 8080, fn(req: Request) -> Response { handle(req, hits, sys.clock) })
 }
 ```
-Only `main` receives `System`. Every other function takes the capabilities it needs as parameters; there is no global way to get one. Capabilities cannot be stored in a `Store` or compared (`E-CAP-01`); they travel only through parameters and captures. So a signature tells you what a function can reach: `fn validate(u: User) -> Result<User, E>` cannot open a socket or read a file. Each capability is used through its methods (`clock.now()`), except `Net`, which `http.serve` takes as an argument.
+Only `main` receives `System`; a capability cannot be stored in a `Store` or compared (`E-CAP-01`). So a signature says what a function can reach: `fn validate(u: User) -> Result<User, E>` cannot open a socket or read a file. Capabilities are used through methods, except `Net`, which `http.serve` takes.
 
 | Capability | Use | In tests |
 |---|---|---|
-| `Net` | `http.serve(net, port, handler)`, `http.serve_with(net, opts, handler)` | call the handler with `http.request(...)`; no `Net` needed |
-| `Clock` | `clock.now() -> Int` (Unix milliseconds) | `Clock.fixed(1700000000000) -> Clock` |
+| `Net` | `http.serve(net, port, handler)`; `http.serve_with(net, Serve { port: 8080, deadline_ms: 5000, workers: None }, handler)` sets the deadline and workers (`None`: one per CPU) | call the handler with `http.request(...)` |
+| `Clock` | `clock.now() -> Int` (Unix milliseconds) | `Clock.fixed(1000) -> Clock` |
 | `Env` | `env.get("PORT") -> Option<String>` | `Env.of(m: Map<String, String>) -> Env` |
-| `Log` | `log.info(msg) -> Unit`, `log.error(msg) -> Unit`. Each line is `<request id> <level> <msg>`, e.g. `req-7 info GET /x -> 200`; in a test the request id is the test name, spaces included: `routes work info GET /x -> 200` | `Log.capture() -> Log`, then `log.lines() -> List<String>` |
-| `Fs` | `fs.read(path) -> Result<String, FsError>`, `fs.write(path, text) -> Result<Unit, FsError>` (text files; `enum FsError { NotFound(path: String), Io(path: String, message: String) }`) | `Fs.memory() -> Fs`, an empty in-memory disk |
-| `Random` | `random.int(max) -> Int`, uniform, `0 <= n < max` (`R-RAND-01` if `max <= 0`); each call advances the handle | `Random.seeded(42) -> Random`: the same sequence every run; two handles with one seed give the same values |
-| `Tasks` | `tasks.spawn(f: fn() -> Unit) -> Unit` (section 4) | `Tasks.inline() -> Tasks` runs `f` immediately |
+| `Log` | `log.info(msg)`, `log.error(msg) -> Unit`. A line is `<request id> <level> <msg>`: `req-7 info GET /x -> 200`; in a test the id is the test name, spaces included | `Log.capture() -> Log`, then `log.lines() -> List<String>` |
+| `Fs` | `fs.read(path) -> Result<String, FsError>`, `fs.write(path, text) -> Result<Unit, FsError>`; `enum FsError { NotFound(path: String), Io(path: String, message: String) }` | `Fs.memory() -> Fs`, an empty in-memory disk |
+| `Random` | `random.int(max) -> Int`, uniform, `0 <= n < max` (`R-RAND-01` if `max <= 0`); each call advances the handle | `Random.seeded(42) -> Random`, the same sequence every run |
+| `Tasks` | `tasks.spawn(f: fn() -> Unit) -> Unit` (section 4) | `Tasks.inline() -> Tasks` runs `f` at once |
 
-A program that touches none of these has `fn main() -> Unit` (core.md 1) or no `main` at all.
+## 4. Tasks and deadlines
+`sys.tasks.spawn(fn() -> Unit { notify(mailer, order) })` runs `f` after the response is sent, with the same request id and deadline. `f` returns nothing; write results to a `Store`. A failure stops only that task (`R-TASK-01`). At most 64 tasks per request (`R-TASK-02`).
 
-## 4. Tasks
-```
-sys.tasks.spawn(fn() -> Unit { notify(mailer, order) })
-```
-Runs `f` after the response is sent, under the same request id and deadline. `f` sees only its captured `let` values (copied), `Store`s, and capabilities passed in. It returns nothing; write results to a `Store`. A failure inside `f` stops only that task: its error line is followed by `R-TASK-01` at the `spawn` site, and a trace made inside `f` starts with the request id and that site. At most 64 tasks per request (`R-TASK-02`).
-
-## 5. Deadlines
-Every request has a deadline: 30 seconds with `http.serve`, or `deadline_ms` of `http.serve_with(net, Serve { port: 8080, deadline_ms: 5000, workers: None }, handler)`, which also sets the worker count (`None`: one per CPU). Past it, the next allocation, loop iteration or I/O fails with `R-TIME-01`, the client gets `500`, and the request's arena is freed. Spawned tasks inherit the deadline.
-
-## 6. Errors
-`R-STORE-01` update function panicked (value unchanged, request failed). `R-STORE-02` same Store touched inside its update function. `R-TASK-01` a spawned task failed. `R-TIME-01` deadline passed. `R-RAND-01` `random.int` with `max <= 0`. `E-STORE-01` type cannot live in a Store. `E-CAP-01` capability stored or copied. Under `http.serve` every stderr line, log or error, starts with the request id (`req-7 R-TIME-01 ...`); `e.trace()` continues across `spawn`.
+Every request has a deadline: 30 seconds, or `deadline_ms` of `serve_with`. Past it, the next allocation, loop iteration or I/O fails with `R-TIME-01` and the client gets `500`. Under `http.serve` every stderr line, log or error, starts with the request id.

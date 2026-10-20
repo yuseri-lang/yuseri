@@ -124,6 +124,7 @@ struct Expr {
   SemTyVec cap_types;   // E_FN: their types
   int id;               // E_FN: unique number for the generated C function
   Decl *method;         // E_CALL: resolved impl method, if any
+  SemTyVec type_args;   // E_CALL: bound generic arguments of a generic fn / method, in declaration order
   int call_kind;        // E_CALL: see CallKind
 };
 

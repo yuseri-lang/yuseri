@@ -36,6 +36,7 @@ typedef struct {
   Scope *scope;
   FnCtx *fn;
   StrVec *generics;  // generic parameter names of the current function
+  StrVec *outer_generics;  // generic parameter names of the impl target, inside its methods
   int loop_depth;    // > 0 inside a for / while body of the current function
 } C;
 
@@ -131,8 +132,10 @@ static Decl *find_method(C *c, Str type_name, Str method) {
 }
 
 static bool is_generic_name(C *c, Str name) {
-  if (!c->generics) return false;
-  for (int i = 0; i < c->generics->len; i++) if (str_eq(c->generics->items[i], name)) return true;
+  if (c->generics)
+    for (int i = 0; i < c->generics->len; i++) if (str_eq(c->generics->items[i], name)) return true;
+  if (c->outer_generics)
+    for (int i = 0; i < c->outer_generics->len; i++) if (str_eq(c->outer_generics->items[i], name)) return true;
   return false;
 }
 
@@ -162,7 +165,11 @@ static Ty *resolve_type(C *c, Type *t) {
   if (str_eq_c(n, "List")) { if (nargs != 1) { ERR(c, "E-TYPE-06", t->line, "List takes 1 type argument"); return ty_prim(TY_ERR); } return ty_list(c->a, a0); }
   if (str_eq_c(n, "Option")) { if (nargs != 1) { ERR(c, "E-TYPE-06", t->line, "Option takes 1 type argument"); return ty_prim(TY_ERR); } return ty_option(c->a, a0); }
   if (str_eq_c(n, "Map")) { if (nargs != 2) { ERR(c, "E-TYPE-06", t->line, "Map takes 2 type arguments"); return ty_prim(TY_ERR); } return ty_map(c->a, a0, a1); }
-  if (str_eq_c(n, "Result")) { if (nargs != 2) { ERR(c, "E-TYPE-06", t->line, "Result takes 2 type arguments"); return ty_prim(TY_ERR); } return ty_result(c->a, a0, a1); }
+  if (str_eq_c(n, "Result")) {
+    if (nargs != 2) { ERR(c, "E-TYPE-06", t->line, "Result takes 2 type arguments"); return ty_prim(TY_ERR); }
+    if (a1 && a1->kind != TY_ENUM && a1->kind != TY_PARAM && a1->kind != TY_ERR) ERR(c, "E-TYPE-01", t->line, "the error type of Result must be an enum, got %s", tstr(c, a1));
+    return ty_result(c->a, a0, a1);
+  }
   if (str_eq_c(n, "ParseError")) return ty_named(c->a, TY_ENUM, n, NULL);
   if (is_generic_name(c, n)) return ty_param(c->a, n);
   Decl *d = find_decl(&c->structs, n);
@@ -209,7 +216,9 @@ static Ty *variant_field_type(C *c, Ty *et, Variant *v, Str field) {
 // Type of a top-level function as a value (generic parameters stay as TY_PARAM).
 static Ty *fn_type(C *c, Decl *d, Ty *self_type) {
   StrVec *saved = c->generics;
+  StrVec *saved_outer = c->outer_generics;
   c->generics = &d->generics;
+  if (self_type && self_type->decl && self_type->decl->generics.len) c->outer_generics = &self_type->decl->generics;
   TyVec ps = {0};
   for (int i = 0; i < d->params.len; i++) {
     Param *p = &d->params.items[i];
@@ -218,6 +227,7 @@ static Ty *fn_type(C *c, Decl *d, Ty *self_type) {
   }
   Ty *ret = d->ret ? resolve_type(c, d->ret) : ty_prim(TY_ERR);
   c->generics = saved;
+  c->outer_generics = saved_outer;
   return ty_fn(c->a, ps, ret);
 }
 
@@ -236,6 +246,7 @@ static bool is_contextual(Expr *e) {
   if (e->kind == E_IDENT) return str_eq_c(e->text, "None");
   if (e->kind == E_LIST) return e->args.len == 0;
   if (e->kind == E_CALL && e->a->kind == E_IDENT) return str_eq_c(e->a->text, "Ok") || str_eq_c(e->a->text, "Err");
+  if (e->kind == E_FIELD && e->a->kind == E_IDENT) return true;  // may be a unit variant of a generic enum
   return false;
 }
 
@@ -260,27 +271,39 @@ static Ty *arg_or_err(C *c, Expr *call, int i, Ty *expected) {
 }
 
 // Calls a user function or a function value: checks arguments, binds generics.
-static Ty *call_fn_type(C *c, Expr *call, Ty *ft, StrVec *gnames, const char *what) {
+static Ty *call_fn_type(C *c, Expr *call, Ty *ft, StrVec *gnames, const char *what, Ty *expected) {
   if (ft->params.len != call->args.len) {
     ERR(c, "E-TYPE-06", call->line, "%s takes %d argument%s, got %d", what, ft->params.len, ft->params.len == 1 ? "" : "s", call->args.len);
     return ty_prim(TY_ERR);
   }
   TyVec binds = {0};
-  for (int i = 0; i < ft->params.len; i++) {
-    Ty *pt = ft->params.items[i];
-    Expr *arg = call->args.items[i];
-    if (call->arg_names.len > i && call->arg_names.items[i].len)
-      ERR(c, "E-TYPE-06", arg->line, "%s does not take named arguments", what);
-    if (gnames && ty_has_param(pt)) {
-      Ty *known = ty_subst(c->a, pt, gnames, &binds);
-      Ty *at = infer(c, arg, ty_has_param(known) ? NULL : known);
-      if (!ty_unify(c->a, pt, at, gnames, &binds))
-        ERR(c, "E-TYPE-01", arg->line, "expected %s, got %s", tstr(c, known), tstr(c, at));
-    } else {
-      check_expr(c, arg, pt);
+  if (gnames && expected && !ty_is_err(expected) && ty_has_param(ft->ret)) ty_unify(c->a, ft->ret, expected, gnames, &binds);
+  // two passes: arguments whose type is their own first, then the ones that need context
+  for (int pass = 0; pass < 2; pass++) {
+    for (int i = 0; i < ft->params.len; i++) {
+      Ty *pt = ft->params.items[i];
+      Expr *arg = call->args.items[i];
+      bool contextual = gnames && ty_has_param(pt) && is_contextual(arg);
+      if ((pass == 0) == contextual) continue;
+      if (pass == 0 && call->arg_names.len > i && call->arg_names.items[i].len)
+        ERR(c, "E-TYPE-06", arg->line, "%s does not take named arguments", what);
+      if (gnames && ty_has_param(pt)) {
+        Ty *known = ty_subst(c->a, pt, gnames, &binds);
+        Ty *at = infer(c, arg, ty_has_param(known) ? NULL : known);
+        if (!ty_unify(c->a, pt, at, gnames, &binds))
+          ERR(c, "E-TYPE-01", arg->line, "expected %s, got %s", tstr(c, known), tstr(c, at));
+      } else {
+        check_expr(c, arg, pt);
+      }
     }
   }
-  return gnames ? ty_subst(c->a, ft->ret, gnames, &binds) : ft->ret;
+  if (!gnames) return ft->ret;
+  for (int i = 0; i < gnames->len; i++) {
+    Ty *b = i < binds.len ? binds.items[i] : NULL;
+    if (!b) { ERR(c, "E-TYPE-05", call->line, "cannot infer %s for %s", cstr(c, gnames->items[i]), what); b = ty_prim(TY_ERR); }
+    VEC_PUSH(c->a, &call->type_args, b);
+  }
+  return ty_subst(c->a, ft->ret, gnames, &binds);
 }
 
 // ---- builtin methods ---------------------------------------------------
@@ -738,7 +761,11 @@ static Ty *infer_inner(C *c, Expr *e, Ty *expected) {
       Sym *y = use_sym(c, e->text, e->line);
       if (y) { e->call_kind = CK_VALUE; return y->type; }
       Decl *f = find_decl(&c->fns, e->text);
-      if (f) { e->call_kind = CK_FN; return fn_type(c, f, NULL); }
+      if (f) {
+        e->call_kind = CK_FN;
+        if (f->generics.len) { ERR(c, "E-TYPE-05", e->line, "generic fn %s must be called; it cannot be passed as a value", cstr(c, e->text)); return ty_prim(TY_ERR); }
+        return fn_type(c, f, NULL);
+      }
       Decl *k = find_decl(&c->consts, e->text);
       if (k) { e->call_kind = CK_STATIC; return resolve_type(c, k->ret); }
       if (is_type_name(c, e->text)) { ERR(c, "E-NAME-01", e->line, "%s is a type, not a value", cstr(c, e->text)); return ty_prim(TY_ERR); }
@@ -753,6 +780,12 @@ static Ty *infer_inner(C *c, Expr *e, Ty *expected) {
           Variant *v = enum_variant(en, e->text);
           if (!v) { ERR(c, "E-NAME-01", e->line, "%s has no variant %s", cstr(c, obj->text), cstr(c, e->text)); return ty_prim(TY_ERR); }
           if (v->fields.len) ERR(c, "E-TYPE-06", e->line, "%s.%s needs (%s: ...)", cstr(c, obj->text), cstr(c, v->name), cstr(c, v->fields.items[0].name));
+          if (en->generics.len) {
+            if (expected && expected->kind == TY_ENUM && expected->decl == en) return expected;
+            if (expected && ty_is_err(expected)) return ty_prim(TY_ERR);
+            ERR(c, "E-TYPE-05", e->line, "cannot infer the type arguments of %s.%s", cstr(c, obj->text), cstr(c, e->text));
+            return ty_prim(TY_ERR);
+          }
           return ty_named(a, TY_ENUM, obj->text, en);
         }
         if (is_type_name(c, obj->text)) { ERR(c, "E-NAME-01", e->line, "%s.%s is not a value; call it", cstr(c, obj->text), cstr(c, e->text)); return ty_prim(TY_ERR); }
@@ -876,7 +909,7 @@ static Ty *infer_call(C *c, Expr *e, Ty *expected) {
     if (d) {
       e->call_kind = CK_FN;
       Ty *ft = fn_type(c, d, NULL);
-      return call_fn_type(c, e, ft, d->generics.len ? &d->generics : NULL, cstr(c, n));
+      return call_fn_type(c, e, ft, d->generics.len ? &d->generics : NULL, cstr(c, n), expected);
     }
     e->call_kind = CK_UNKNOWN;
     if (find_decl(&c->structs, n)) { ERR(c, "E-SYN-01", e->line, "structs are built with %s { field: value }", cstr(c, n)); return ty_prim(TY_ERR); }
@@ -905,12 +938,33 @@ static Ty *infer_call(C *c, Expr *e, Ty *expected) {
       if (en->generics.len && expected && expected->kind == TY_ENUM && expected->decl == en) et = expected;
       if (v->fields.len == 0) { ERR(c, "E-TYPE-06", e->line, "%s.%s takes no fields; write it without ()", cstr(c, tn), cstr(c, fnm)); return et; }
       if (e->args.len != v->fields.len) ERR(c, "E-TYPE-06", e->line, "%s.%s takes %d field%s, got %d", cstr(c, tn), cstr(c, fnm), v->fields.len, v->fields.len == 1 ? "" : "s", e->args.len);
+      bool generic_unbound = en->generics.len > 0 && et->args.len == 0;
+      TyVec binds = {0};
       for (int i = 0; i < e->args.len; i++) {
         Str an = e->arg_names.len > i ? e->arg_names.items[i] : (Str){0};
-        Ty *ft = NULL;
-        if (an.len) { ft = variant_field_type(c, et, v, an); if (!ft) ERR(c, "E-TYPE-06", e->line, "%s.%s has no field %s", cstr(c, tn), cstr(c, fnm), cstr(c, an)); }
-        else if (i < v->fields.len) { ERR(c, "E-TYPE-06", e->line, "%s.%s fields are named: %s: ...", cstr(c, tn), cstr(c, fnm), cstr(c, v->fields.items[i].name)); ft = variant_field_type(c, et, v, v->fields.items[i].name); }
-        check_expr(c, e->args.items[i], ft ? ft : ty_prim(TY_ERR));
+        Ty *raw = NULL;
+        if (an.len) {
+          for (int k = 0; k < v->fields.len; k++) if (str_eq(v->fields.items[k].name, an)) raw = v->fields.items[k].ty;
+          if (!raw) { ERR(c, "E-TYPE-06", e->line, "%s.%s has no field %s", cstr(c, tn), cstr(c, fnm), cstr(c, an)); infer(c, e->args.items[i], NULL); continue; }
+        } else if (i < v->fields.len) {
+          ERR(c, "E-TYPE-06", e->line, "%s.%s fields are named: %s: ...", cstr(c, tn), cstr(c, fnm), cstr(c, v->fields.items[i].name));
+          raw = v->fields.items[i].ty;
+        } else { infer(c, e->args.items[i], NULL); continue; }
+        if (!raw) raw = ty_prim(TY_ERR);
+        if (generic_unbound) {
+          Ty *known = ty_subst(a, raw, &en->generics, &binds);
+          Ty *vt = infer(c, e->args.items[i], ty_has_param(known) ? NULL : known);
+          if (!ty_unify(a, raw, vt, &en->generics, &binds)) ERR(c, "E-TYPE-01", e->args.items[i]->line, "expected %s, got %s", tstr(c, known), tstr(c, vt));
+        } else {
+          check_expr(c, e->args.items[i], ty_subst(a, raw, &en->generics, &et->args));
+        }
+      }
+      if (generic_unbound) {
+        for (int i = 0; i < en->generics.len; i++) {
+          Ty *b = i < binds.len ? binds.items[i] : NULL;
+          if (!b) { ERR(c, "E-TYPE-05", e->line, "cannot infer %s for %s.%s", cstr(c, en->generics.items[i]), cstr(c, tn), cstr(c, fnm)); b = ty_prim(TY_ERR); }
+          VEC_PUSH(a, &et->args, b);
+        }
       }
       return et;
     }
@@ -933,13 +987,14 @@ static Ty *infer_call(C *c, Expr *e, Ty *expected) {
         e->call_kind = CK_METHOD;
         e->method = m;
         Ty *ft = fn_type(c, m, recv);
+        if (recv->decl && recv->decl->generics.len) ft = ty_subst(a, ft, &recv->decl->generics, &recv->args);
         if (ft->params.len == 0 || !str_eq_c(m->params.items[0].name, "self")) { ERR(c, "E-TYPE-06", e->line, "%s.%s has no self and cannot be called as a method", tstr(c, recv), cstr(c, f->text)); return ft->ret; }
         TyVec rest = {0};
         for (int i = 1; i < ft->params.len; i++) VEC_PUSH(a, &rest, ft->params.items[i]);
         Ty *callable = ty_fn(a, rest, ft->ret);
         Buf what = {0};
         buf_str(&what, recv->name); buf_puts(&what, "."); buf_str(&what, f->text);
-        Ty *res = call_fn_type(c, e, callable, m->generics.len ? &m->generics : NULL, arena_cstr(a, str_from(what.p, what.len)));
+        Ty *res = call_fn_type(c, e, callable, m->generics.len ? &m->generics : NULL, arena_cstr(a, str_from(what.p, what.len)), expected);
         buf_free(&what);
         return res;
       }
@@ -953,7 +1008,7 @@ static Ty *infer_call(C *c, Expr *e, Ty *expected) {
   Ty *ft = infer(c, f, NULL);
   if (ty_is_err(ft)) { for (int i = 0; i < e->args.len; i++) infer(c, e->args.items[i], NULL); return ft; }
   if (ft->kind != TY_FN) { ERR(c, "E-TYPE-01", e->line, "%s is not a function", tstr(c, ft)); return ty_prim(TY_ERR); }
-  return call_fn_type(c, e, ft, NULL, f->kind == E_IDENT ? cstr(c, f->text) : "function value");
+  return call_fn_type(c, e, ft, NULL, f->kind == E_IDENT ? cstr(c, f->text) : "function value", expected);
 }
 
 // ---- statements and blocks ---------------------------------------------
@@ -1139,12 +1194,16 @@ void check_module(Arena *a, Module *m) {
         Decl *sd = find_decl(&c->structs, d->name);
         Decl *ed = sd ? NULL : find_decl(&c->enums, d->name);
         if (!sd && !ed) { ERR(c, "E-NAME-01", d->line, "impl for unknown type %s", cstr(c, d->name)); break; }
-        Ty *self_type = ty_named(a, sd ? TY_STRUCT : TY_ENUM, d->name, sd ? sd : ed);
+        Decl *td = sd ? sd : ed;
+        Ty *self_type = ty_named(a, sd ? TY_STRUCT : TY_ENUM, d->name, td);
+        for (int k = 0; k < td->generics.len; k++) { Ty *pt = ty_param(a, td->generics.items[k]); VEC_PUSH(a, &self_type->args, pt); }
+        c->outer_generics = td->generics.len ? &td->generics : NULL;
         for (int j = 0; j < d->methods.len; j++) {
           for (int k = 0; k < j; k++)
             if (str_eq(d->methods.items[k]->name, d->methods.items[j]->name)) ERR(c, "E-NAME-02", d->methods.items[j]->line, "duplicate method %s", cstr(c, d->methods.items[j]->name));
           check_fn_body(c, d->methods.items[j], self_type);
         }
+        c->outer_generics = NULL;
         break;
       }
       case D_TEST: {

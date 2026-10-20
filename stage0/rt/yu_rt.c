@@ -353,6 +353,16 @@ yu_list yu_map_entries(yu_map m, int64_t vsz, int64_t voff, int64_t esz) {
   return out;
 }
 
+// ---- traces ---------------------------------------------------------------
+
+yu_str yu_request_id = {(const uint8_t *)"main", 4};
+
+void yu_trace_add(yu_list *trace, const char *loc) {
+  if (trace->len == 0) yu_list_push(trace, &yu_request_id, sizeof(yu_str));
+  yu_str l = {(const uint8_t *)loc, (int64_t)strlen(loc)};
+  yu_list_push(trace, &l, sizeof(yu_str));
+}
+
 // ---- tests ----------------------------------------------------------------
 
 static int g_tests = 0, g_failed = 0;
@@ -368,6 +378,7 @@ void yu_assert_eq_fail(const char *loc, yu_str left, yu_str right) {
 int yu_test_run(const char *name, void (*fn)(void)) {
   g_tests++;
   g_in_test = true;
+  yu_request_id = (yu_str){(const uint8_t *)name, (int64_t)strlen(name)};
   bool ok;
   if (setjmp(g_test_jmp) == 0) { fn(); ok = true; }
   else ok = false;

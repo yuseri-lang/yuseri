@@ -8,7 +8,7 @@
 struct Request { id: String, method: String, path: String, query: Map<String, String>, headers: Map<String, String>, body: String }
 struct Response { status: Int, headers: Map<String, String>, body: String }
 ```
-`id` is the request id; it is also the first entry of every error trace created while handling the request. `method` is upper-case (`GET`). `path` has no query string and is percent-decoded; a trailing `/` is kept as written. `query` holds the decoded `?a=1&b=2` pairs. Header names are lower-case.
+After `import std.http` these two types are used by their plain names (`Request`, not `http.Request`); the functions keep the `http.` prefix. `id` is the request id; it is also the first entry of every error trace created while handling the request. `method` is upper-case (`GET`). `path` has no query string and is percent-decoded; a trailing `/` is kept as written. `query` holds the decoded `?a=1&b=2` pairs. Header names are lower-case.
 
 ## Functions
 

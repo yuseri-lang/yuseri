@@ -21,6 +21,10 @@ make test
 
 `tests/run/eval_api.yu` is a JSON API server written by an AI from the skill; `yuseri run` serves it on port 8080, and `sh tests/smoke_http.sh` talks to it over HTTP.
 
+## License
+
+Copyright 2026 kaz-i. Licensed under the Apache License, Version 2.0; see [`LICENSE`](LICENSE).
+
 ## Layout
 
 ```
@@ -40,3 +44,4 @@ tests/       golden tests
 - 状態: 研究の初期段階。Stage 0 コンパイラが MVP に到達（スキルだけで AI が書いた JSON API サーバーがネイティブバイナリになり HTTP を受ける。`std.json`、`std.http`）
 - スキル（言語リファレンス）: `skills/` 配下
 - 命名日: 2026-10-20
+- ライセンス: Apache License 2.0（`LICENSE`）

@@ -75,7 +75,7 @@ static void split_target(yu_str target, yu_str *path, yu_map *query) {
 
 yu_http_request yu_http_request_make(yu_str method, yu_str path, yu_str body) {
   yu_http_request r = {0};
-  r.f_id = yu_str_lit("test", 4);
+  r.f_id = yu_request_id;  // in a test: the test name, the same id log lines and traces carry
   r.f_method = upper(method);
   split_target(path, &r.f_path, &r.f_query);
   r.f_headers = str_map();

@@ -202,7 +202,7 @@ static Ty *resolve_type(C *c, Type *t) {
   if (str_eq_c(n, "Map")) { if (nargs != 2) { ERR(c, "E-TYPE-06", t->line, "Map takes 2 type arguments"); return ty_prim(TY_ERR); } return ty_map(c->a, a0, a1); }
   if (str_eq_c(n, "Result")) {
     if (nargs != 2) { ERR(c, "E-TYPE-06", t->line, "Result takes 2 type arguments"); return ty_prim(TY_ERR); }
-    if (a1 && a1->kind != TY_ENUM && a1->kind != TY_PARAM && a1->kind != TY_ERR) ERR(c, "E-TYPE-01", t->line, "the error type of Result must be an enum, got %s", tstr(c, a1));
+    if (a1 && a1->kind != TY_ENUM && a1->kind != TY_PARAM && a1->kind != TY_ERR) ERR(c, "E-RES-03", t->line, "the error type of Result must be an enum, got %s", tstr(c, a1));
     return ty_result(c->a, a0, a1);
   }
   if (str_eq_c(n, "Store")) {

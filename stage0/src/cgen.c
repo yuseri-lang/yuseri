@@ -616,6 +616,7 @@ static const char *gen_expr(G *g, Expr *e) {
       return sfmt(g, "yu_sb_finish(&%s)", sb);
     }
     case E_IDENT: {
+      if (str_eq_c(e->text, "Unit")) return "YU_UNIT";
       if (str_eq_c(e->text, "None")) return sfmt(g, "(%s){false}", ctype(g, t));
       if (e->call_kind == CK_FN) {
         Decl *d = find_decl(&g->fns, e->text);

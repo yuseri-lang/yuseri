@@ -19,14 +19,14 @@ const MAX: Int = 100
 Inference is local: a binding takes its initializer's type. `None`, `Some`, `Ok`, `Err`, `[]`, `List<T>()` take their type from where they are used (return type, parameter, or the other argument of the same call).
 
 ## 4. Basic types
-`Int` (64-bit), `Float`, `Bool` (`true` / `false`), `String`, `Bytes`, `Unit`. Conversions are explicit functions and never silent:
+`Int` (64-bit), `Float`, `Bool` (`true` / `false`), `String`, `Bytes`, `Unit` (its only value is written `Unit`, as in `Ok(Unit)`). Conversions are explicit functions and never silent:
 ```
 let n = Int.parse("42")       // Result<Int, ParseError>; ParseError has one variant, Invalid
 ```
 `Int.parse` accepts an optional `-` and decimal digits that fit in 64 bits, nothing else. `Float.from(i)` and `String.from(x)` (x: Int, Float or Bool) are the other conversions.
 
 ## 5. Expressions
-Arithmetic `+ - * / %` on `Int` or `Float` only (no `+` on `String`; use interpolation or `join`); unary `-` (`-1`). Comparison `== != < <= > >=`. Logic `&& || !`. Precedence, high to low: unary, `* / %`, `+ -`, comparison, `&&`, `||`. `==` compares any Core value structurally; `Map` equality ignores order. Overflow and division by zero fail with `R-INT-01` / `R-INT-02`, never wrap. Any expression can stand as a statement; its value is dropped, except a `Result` (see 13).
+Arithmetic `+ - * / %` on `Int` or `Float` only (no `+` on `String`; use interpolation or `join`); unary `-` (`-1`). Comparison `== != < <= > >=`. Logic `&& || !` (`&&` and `||` short-circuit). Precedence, high to low: unary, `* / %`, `+ -`, comparison, `&&`, `||`. `==` compares any Core value structurally; `Map` equality ignores order. Overflow and division by zero fail with `R-INT-01` / `R-INT-02`, never wrap. Any expression can stand as a statement; its value is dropped, except a `Result` (see 13).
 
 ## 6. Strings
 Immutable UTF-8. `"..."` literals, `{expr}` interpolation, `\"` `\\` `\n` `\{` `\}` escapes; a bare `{` or `}` outside interpolation is `E-STR-01`. Interpolation accepts any Core value (the one implicit conversion) and prints it as source: `Status.Active`, `[1, 2]`, `Some(3)`.

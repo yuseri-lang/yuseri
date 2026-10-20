@@ -80,8 +80,12 @@ static int cmd_check(int argc, char **argv) {
     if (diag_count() == before) {
       Buf out = {0};
       fmt_module(m, &out);
-      if (!(src.len == out.len && memcmp(src.p, out.p, (size_t)out.len) == 0))
-        diag_error("E-FMT-01", argv[i], 1, "file is not formatted");
+      if (!(src.len == out.len && memcmp(src.p, out.p, (size_t)out.len) == 0)) {
+        // report the first line that differs from the canonical layout
+        int line = 1, k = 0;
+        while (k < src.len && k < out.len && src.p[k] == out.p[k]) { if (src.p[k] == '\n') line++; k++; }
+        diag_error("E-FMT-01", argv[i], line, "file is not formatted; the layout differs from line %d", line);
+      }
       buf_free(&out);
     }
     diag_flush();

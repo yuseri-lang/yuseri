@@ -1,0 +1,61 @@
+// Inventory module
+struct Item { sku: String, qty: Int }
+
+enum InvError { NotFound(sku: String), Negative(sku: String) }
+
+fn total_qty(items: List<Item>) {
+  var total = 0
+  for item in items {
+    total = total + item.qty
+  }
+  total
+}
+
+fn find(items: List<Item>, sku: String) -> Result<Item, InvError> {
+  for item in items {
+    if item.sku == sku { return Ok(item) }
+  }
+  Err(InvError.NotFound(sku: sku))
+}
+
+fn qty_of(items: List<Item>, sku: String) -> Int {
+  let item = find(items, sku)?
+  item.qty
+}
+
+fn label(item: Item) -> String {
+  let prefix = "SKU"
+  "{item.sku}" + ":" + String.from(item.qty)
+}
+
+fn to_json(item: Item) -> String {
+  "\{\"sku\":\"{item.sku}\",\"qty\":{item.qty}\}"
+}
+
+fn describe(items: List<Item>, sku: String) -> String {
+  match find(items, sku) {
+    Ok(item) => label(item)
+  }
+}
+
+fn add(items: List<Item>, item: Item) -> List<Item> {
+  let out = items
+  out.push(item)
+  out
+}
+
+fn check(items: List<Item>) -> Unit { find(items, "a") }
+
+fn scale(items: List<Item>, factor: Int) -> List<Item> {
+  var f = factor
+  items.map(fn(i: Item) -> Item { Item { ..i, qty: i.qty * f } })
+}
+
+fn status(items: List<Item>) -> String {
+  if items.len() > 0 { "ok" } else { 0 }
+}
+
+test "total of two" {
+  let items = [Item { sku: "a", qty: 2 }, Item { sku: "b", qty: 3 }]
+  assert_eq(total_qty(items), 5)
+}

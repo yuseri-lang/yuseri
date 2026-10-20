@@ -1,6 +1,6 @@
 # std.json
 
-`import std.json`. Converts Core values to and from JSON text.
+`import std.json`. Converts Core values to and from JSON text. `JsonError` is used by its plain name; the functions keep the `json.` prefix.
 
 ## Encoding
 
@@ -21,7 +21,7 @@ Rules: an object fills a struct; every field must be present unless its type is 
 ```
 enum JsonError { Syntax(at: Int), Shape(path: String, expected: String) }
 ```
-`Syntax` carries the byte offset of the first bad character. `Shape` names the path (`users[2].id`) and the expected type when the text is valid JSON but does not fit `T`.
+Whitespace around the value is allowed; anything else after it is a syntax error. `Syntax` carries the 0-based byte offset of the first bad character. `Shape` names the path (`users[2].id`) and the expected type when the text is valid JSON but does not fit `T`.
 
 JSON text in a Yuseri string literal needs `\{` and `\}` (core.md 6); the examples below show it.
 

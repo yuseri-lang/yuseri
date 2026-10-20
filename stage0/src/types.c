@@ -18,6 +18,7 @@ Ty *ty_map(Arena *a, Ty *k, Ty *v) { Ty *t = mk(a, TY_MAP); t->a = k; t->b = v; 
 Ty *ty_option(Arena *a, Ty *v) { Ty *t = mk(a, TY_OPTION); t->a = v; return t; }
 Ty *ty_result(Arena *a, Ty *ok, Ty *err) { Ty *t = mk(a, TY_RESULT); t->a = ok; t->b = err; return t; }
 Ty *ty_entry(Arena *a, Ty *k, Ty *v) { Ty *t = mk(a, TY_ENTRY); t->a = k; t->b = v; return t; }
+Ty *ty_store(Arena *a, Ty *v) { Ty *t = mk(a, TY_STORE); t->a = v; return t; }
 Ty *ty_fn(Arena *a, TyVec params, Ty *ret) { Ty *t = mk(a, TY_FN); t->params = params; t->ret = ret; return t; }
 Ty *ty_param(Arena *a, Str name) { Ty *t = mk(a, TY_PARAM); t->name = name; return t; }
 Ty *ty_named(Arena *a, TyKind k, Str name, Decl *decl) { Ty *t = mk(a, k); t->name = name; t->decl = decl; return t; }
@@ -30,7 +31,7 @@ bool ty_eq(Ty *x, Ty *y) {
   if (x->kind == TY_NEVER || y->kind == TY_NEVER) return true;
   if (x->kind != y->kind) return false;
   switch (x->kind) {
-    case TY_LIST: case TY_OPTION: return ty_eq(x->a, y->a);
+    case TY_LIST: case TY_OPTION: case TY_STORE: return ty_eq(x->a, y->a);
     case TY_MAP: case TY_RESULT: case TY_ENTRY: return ty_eq(x->a, y->a) && ty_eq(x->b, y->b);
     case TY_STRUCT: case TY_ENUM:
       if (x->decl != y->decl || !str_eq(x->name, y->name)) return false;
@@ -62,6 +63,7 @@ void ty_print(Buf *b, Ty *t) {
     case TY_OPTION: buf_puts(b, "Option<"); ty_print(b, t->a); buf_puts(b, ">"); break;
     case TY_RESULT: buf_puts(b, "Result<"); ty_print(b, t->a); buf_puts(b, ", "); ty_print(b, t->b); buf_puts(b, ">"); break;
     case TY_ENTRY: buf_puts(b, "Entry<"); ty_print(b, t->a); buf_puts(b, ", "); ty_print(b, t->b); buf_puts(b, ">"); break;
+    case TY_STORE: buf_puts(b, "Store<"); ty_print(b, t->a); buf_puts(b, ">"); break;
     case TY_STRUCT: case TY_ENUM:
       buf_str(b, t->name);
       if (t->args.len) {
@@ -92,7 +94,7 @@ bool ty_has_param(Ty *t) {
   if (!t) return false;
   switch (t->kind) {
     case TY_PARAM: return true;
-    case TY_LIST: case TY_OPTION: return ty_has_param(t->a);
+    case TY_LIST: case TY_OPTION: case TY_STORE: return ty_has_param(t->a);
     case TY_MAP: case TY_RESULT: case TY_ENTRY: return ty_has_param(t->a) || ty_has_param(t->b);
     case TY_STRUCT: case TY_ENUM:
       for (int i = 0; i < t->args.len; i++) if (ty_has_param(t->args.items[i])) return true;
@@ -119,6 +121,7 @@ Ty *ty_subst(Arena *a, Ty *t, StrVec *names, TyVec *binds) {
     }
     case TY_LIST: return ty_list(a, ty_subst(a, t->a, names, binds));
     case TY_OPTION: return ty_option(a, ty_subst(a, t->a, names, binds));
+    case TY_STORE: return ty_store(a, ty_subst(a, t->a, names, binds));
     case TY_MAP: return ty_map(a, ty_subst(a, t->a, names, binds), ty_subst(a, t->b, names, binds));
     case TY_RESULT: return ty_result(a, ty_subst(a, t->a, names, binds), ty_subst(a, t->b, names, binds));
     case TY_ENTRY: return ty_entry(a, ty_subst(a, t->a, names, binds), ty_subst(a, t->b, names, binds));
@@ -150,7 +153,7 @@ bool ty_unify(Arena *a, Ty *pat, Ty *actual, StrVec *names, TyVec *binds) {
   }
   if (pat->kind != actual->kind) return false;
   switch (pat->kind) {
-    case TY_LIST: case TY_OPTION: return ty_unify(a, pat->a, actual->a, names, binds);
+    case TY_LIST: case TY_OPTION: case TY_STORE: return ty_unify(a, pat->a, actual->a, names, binds);
     case TY_MAP: case TY_RESULT: case TY_ENTRY:
       return ty_unify(a, pat->a, actual->a, names, binds) && ty_unify(a, pat->b, actual->b, names, binds);
     case TY_STRUCT: case TY_ENUM:

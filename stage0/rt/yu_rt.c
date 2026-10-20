@@ -6,18 +6,20 @@
 // ---- arena --------------------------------------------------------------
 
 typedef struct Chunk { struct Chunk *next; size_t used, cap; char data[]; } Chunk;
-static Chunk *g_arena = NULL;
+struct yu_arena { Chunk *head; };
+static yu_arena g_main_arena = {NULL};
+static yu_arena *g_cur = &g_main_arena;  // where yu_alloc allocates
 #define CHUNK (256 * 1024)
 
 void *yu_alloc(size_t n) {
   n = (n + 15) & ~(size_t)15;
-  Chunk *c = g_arena;
+  Chunk *c = g_cur->head;
   if (!c || c->used + n > c->cap) {
     size_t cap = n > CHUNK ? n : CHUNK;
     c = malloc(sizeof(Chunk) + cap);
     if (!c) { fprintf(stderr, "R-MEM-01 out of memory\n"); exit(2); }
-    c->next = g_arena; c->used = 0; c->cap = cap;
-    g_arena = c;
+    c->next = g_cur->head; c->used = 0; c->cap = cap;
+    g_cur->head = c;
   }
   void *p = c->data + c->used;
   c->used += n;
@@ -25,18 +27,61 @@ void *yu_alloc(size_t n) {
   return p;
 }
 
-void yu_arena_reset(void) {
-  while (g_arena) { Chunk *n = g_arena->next; free(g_arena); g_arena = n; }
-}
+static void chunks_free(Chunk *c) { while (c) { Chunk *n = c->next; free(c); c = n; } }
+
+void yu_arena_reset(void) { chunks_free(g_cur->head); g_cur->head = NULL; }
 
 yu_arena_mark yu_arena_mark_now(void) {
-  yu_arena_mark m = {g_arena, g_arena ? g_arena->used : 0};
+  yu_arena_mark m = {g_cur->head, g_cur->head ? g_cur->head->used : 0};
   return m;
 }
 
 void yu_arena_release(yu_arena_mark m) {
-  while (g_arena && g_arena != m.chunk) { Chunk *n = g_arena->next; free(g_arena); g_arena = n; }
-  if (g_arena) g_arena->used = m.used;
+  Chunk *c = g_cur->head;
+  while (c && c != m.chunk) { Chunk *n = c->next; free(c); c = n; }
+  g_cur->head = c;
+  if (c) c->used = m.used;
+}
+
+yu_arena *yu_arena_new(void) { return calloc(1, sizeof(yu_arena)); }
+void yu_arena_free(yu_arena *a) { if (!a) return; chunks_free(a->head); free(a); }
+yu_arena *yu_arena_use(yu_arena *a) { yu_arena *prev = g_cur; g_cur = a ? a : &g_main_arena; return prev; }
+
+// ---- Store ----------------------------------------------------------------
+
+yu_store *yu_store_new(int64_t vsz) {
+  yu_store *s = calloc(1, sizeof *s);
+  s->vsz = vsz;
+  s->arena = yu_arena_new();
+  yu_arena *prev = yu_arena_use(s->arena);
+  s->value = yu_alloc((size_t)vsz);
+  yu_arena_use(prev);
+  return s;
+}
+
+yu_arena *yu_store_begin(yu_store *s) {
+  (void)s;
+  return yu_arena_use(yu_arena_new());
+}
+
+void yu_store_commit(yu_store *s, const void *copied, yu_arena *prev) {
+  yu_arena *fresh = yu_arena_use(prev);
+  void *slot;
+  {  // the slot itself lives in the fresh arena too
+    yu_arena *p2 = yu_arena_use(fresh);
+    slot = yu_alloc((size_t)s->vsz);
+    yu_arena_use(p2);
+  }
+  memcpy(slot, copied, (size_t)s->vsz);
+  yu_arena_free(s->arena);
+  s->arena = fresh;
+  s->value = slot;
+}
+
+void yu_store_abort(yu_store *s, yu_arena *prev) {
+  (void)s;
+  yu_arena *fresh = yu_arena_use(prev);
+  yu_arena_free(fresh);
 }
 
 // ---- failures -------------------------------------------------------------

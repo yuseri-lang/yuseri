@@ -53,6 +53,7 @@ typedef struct {
 
 static Ty *infer(C *c, Expr *e, Ty *expected);
 static bool json_able(C *c, Ty *t);
+static bool storable(C *c, Ty *t);
 static Ty *check_expr(C *c, Expr *e, Ty *expected);
 static Ty *check_block(C *c, Block *b, Ty *expected);
 static void check_stmt(C *c, Stmt *s);
@@ -150,7 +151,7 @@ static bool is_generic_name(C *c, Str name) {
 }
 
 static bool is_type_name(C *c, Str n) {
-  static const char *builtins[] = {"Int", "Float", "Bool", "String", "Bytes", "Unit", "List", "Map", "Option", "Result", "ParseError"};
+  static const char *builtins[] = {"Int", "Float", "Bool", "String", "Bytes", "Unit", "List", "Map", "Option", "Result", "ParseError", "Store"};
   for (size_t i = 0; i < sizeof builtins / sizeof builtins[0]; i++) if (str_eq_c(n, builtins[i])) return true;
   return find_decl(&c->structs, n) || find_decl(&c->enums, n);
 }
@@ -179,6 +180,11 @@ static Ty *resolve_type(C *c, Type *t) {
     if (nargs != 2) { ERR(c, "E-TYPE-06", t->line, "Result takes 2 type arguments"); return ty_prim(TY_ERR); }
     if (a1 && a1->kind != TY_ENUM && a1->kind != TY_PARAM && a1->kind != TY_ERR) ERR(c, "E-TYPE-01", t->line, "the error type of Result must be an enum, got %s", tstr(c, a1));
     return ty_result(c->a, a0, a1);
+  }
+  if (str_eq_c(n, "Store")) {
+    if (nargs != 1) { ERR(c, "E-TYPE-06", t->line, "Store takes 1 type argument"); return ty_prim(TY_ERR); }
+    if (!storable(c, a0)) ERR(c, "E-STORE-01", t->line, "%s cannot live in a Store", tstr(c, a0));
+    return ty_store(c->a, a0);
   }
   if (str_eq_c(n, "ParseError")) return ty_named(c->a, TY_ENUM, n, NULL);
   if (is_generic_name(c, n)) return ty_param(c->a, n);
@@ -383,6 +389,19 @@ static Ty *builtin_method(C *c, Ty *recv, Str name, Expr *call, Ty *expected, bo
       if (method_is(name, "trace")) { check_arg_count(c, call, 0, "trace"); result = ty_list(a, STRING); }
       else *found = false;
       break;
+    case TY_STORE: {
+      Ty *T = recv->a;
+      if (method_is(name, "get")) { check_arg_count(c, call, 0, "get"); result = T; }
+      else if (method_is(name, "set")) { check_arg_count(c, call, 1, "set"); arg_or_err(c, call, 0, T); result = UNIT; }
+      else if (method_is(name, "update")) {
+        check_arg_count(c, call, 1, "update");
+        TyVec ps = {0};
+        VEC_PUSH(a, &ps, T);
+        arg_or_err(c, call, 0, ty_fn(a, ps, T));
+        result = UNIT;
+      } else *found = false;
+      break;
+    }
     case TY_STRING: {
       struct { const char *n; int nargs; TyKind a0, a1; int ret; } table[] = {
           // ret: 0 Int, 1 Bool, 2 String, 3 List<String>, 4 Option<Int>, 5 Bytes
@@ -588,7 +607,8 @@ static Ty *infer_binary(C *c, Expr *e) {
   Ty *r = infer(c, e->b, is_contextual(e->b) ? l : NULL);
   if (ty_is_err(l) || ty_is_err(r)) return (op == T_EQ || op == T_NE || op == T_LT || op == T_LE || op == T_GT || op == T_GE) ? ty_prim(TY_BOOL) : ty_prim(TY_ERR);
   if (op == T_EQ || op == T_NE) {
-    if (!ty_eq(l, r)) ERR(c, "E-TYPE-01", e->line, "cannot compare %s with %s", tstr(c, l), tstr(c, r));
+    if (l->kind == TY_STORE || l->kind == TY_FN) ERR(c, "E-TYPE-01", e->line, "%s cannot be compared; compare the value from get() instead", tstr(c, l));
+    else if (!ty_eq(l, r)) ERR(c, "E-TYPE-01", e->line, "cannot compare %s with %s", tstr(c, l), tstr(c, r));
     return ty_prim(TY_BOOL);
   }
   if (op == T_LT || op == T_LE || op == T_GT || op == T_GE) {
@@ -934,6 +954,12 @@ static Ty *infer_call(C *c, Expr *e, Ty *expected) {
     e->call_kind = CK_STATIC;
     if (str_eq_c(tn, "Int") && str_eq_c(fnm, "parse")) { check_arg_count(c, e, 1, "Int.parse"); arg_or_err(c, e, 0, ty_prim(TY_STRING)); return ty_result(a, ty_prim(TY_INT), ty_named(a, TY_ENUM, STR_LIT("ParseError"), NULL)); }
     if (str_eq_c(tn, "Float") && str_eq_c(fnm, "from")) { check_arg_count(c, e, 1, "Float.from"); arg_or_err(c, e, 0, ty_prim(TY_INT)); return ty_prim(TY_FLOAT); }
+    if (str_eq_c(tn, "Store") && str_eq_c(fnm, "new")) {
+      check_arg_count(c, e, 1, "Store.new");
+      Ty *vt = arg_or_err(c, e, 0, expected && expected->kind == TY_STORE ? expected->a : NULL);
+      if (!storable(c, vt)) ERR(c, "E-STORE-01", e->line, "%s cannot live in a Store", tstr(c, vt));
+      return ty_store(a, vt);
+    }
     if (str_eq_c(tn, "String") && str_eq_c(fnm, "from")) {
       check_arg_count(c, e, 1, "String.from");
       Ty *t = arg_or_err(c, e, 0, NULL);
@@ -1229,6 +1255,27 @@ static void inject_std(Arena *a, Module *m) {
   if (!injected.len) return;
   for (int i = 0; i < m->decls.len; i++) VEC_PUSH(a, &injected, m->decls.items[i]);
   m->decls = injected;
+}
+
+// True for values a Store may hold: plain data without functions, Stores or capabilities.
+static bool storable(C *c, Ty *t) {
+  switch (t->kind) {
+    case TY_INT: case TY_FLOAT: case TY_BOOL: case TY_STRING: case TY_BYTES: case TY_UNIT: case TY_ERR: case TY_PARAM: return true;
+    case TY_LIST: case TY_OPTION: return storable(c, t->a);
+    case TY_MAP: case TY_RESULT: case TY_ENTRY: return storable(c, t->a) && storable(c, t->b);
+    case TY_STRUCT:
+      if (!t->decl) return true;
+      for (int i = 0; i < t->decl->params.len; i++) if (!storable(c, struct_field(c, t, t->decl->params.items[i].name))) return false;
+      return true;
+    case TY_ENUM:
+      if (!t->decl) return true;
+      for (int i = 0; i < t->decl->variants.len; i++) {
+        Variant *v = &t->decl->variants.items[i];
+        for (int k = 0; k < v->fields.len; k++) if (!storable(c, variant_field_type(c, t, v, v->fields.items[k].name))) return false;
+      }
+      return true;
+    default: return false;  // TY_FN, TY_STORE, TY_NEVER
+  }
 }
 
 // True for types std.json can encode and decode.

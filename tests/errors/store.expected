@@ -1,0 +1,4 @@
+E-STORE-01 tests/errors/store.yu:4 fn(Int) -> Int cannot live in a Store; keep only plain data in a Store: structs, lists, maps, Int, Float, Bool, String, Option and enums
+E-STORE-01 tests/errors/store.yu:6 Handler cannot live in a Store; keep only plain data in a Store: structs, lists, maps, Int, Float, Bool, String, Option and enums
+E-STORE-01 tests/errors/store.yu:8 Store<Int> cannot live in a Store; keep only plain data in a Store: structs, lists, maps, Int, Float, Bool, String, Option and enums
+E-TYPE-01 tests/errors/store.yu:10 Store<Int> cannot be compared; compare the value from get() instead; convert explicitly (`Int.parse`, `String.from`, ...) or change the declared type

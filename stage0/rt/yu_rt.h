@@ -84,6 +84,10 @@ yu_map yu_map_copy(yu_map m, int64_t vsz);
 // entries as a list of structs laid out as { K key; V value; } with `voff` = offset of value
 yu_list yu_map_entries(yu_map m, int64_t vsz, int64_t voff, int64_t esz);
 
+// ---- error traces: the request id, then one "file:line" per Err and `?`
+extern yu_str yu_request_id;
+void yu_trace_add(yu_list *trace, const char *loc);
+
 // ---- tests and assertions
 void yu_assert(bool cond, const char *loc, const char *text);
 void yu_assert_eq_fail(const char *loc, yu_str left, yu_str right) __attribute__((noreturn));

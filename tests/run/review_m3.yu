@@ -1,0 +1,52 @@
+// Review findings on M3: traces must not be shared between copies, and anonymous
+// functions inside generic instances need one C function per instance.
+enum E { Boom }
+
+fn a(e: E) -> Result<Int, E> { Err(e) }
+
+fn b(e: E) -> Result<Int, E> { Err(e) }
+
+fn via_a(e: E) -> Result<Int, E> {
+  let v = a(e)?
+  Ok(v)
+}
+
+fn mapped<T>(xs: List<T>) -> List<T> { xs.map(fn(x: T) -> T { x }) }
+
+fn keep_if<T>(xs: List<T>, wanted: T) -> List<T> { xs.filter(fn(x: T) -> Bool { x == wanted }) }
+
+test "traces of separate paths stay separate" {
+  let e = E.Boom
+  let ra = a(e)
+  let rb = b(e)
+  let rc = via_a(e)
+  match ra {
+    Ok(_) => assert(false)
+    Err(ea) => {
+      assert_eq(ea.trace().len(), 2)
+      assert(ea.trace()[1].ends_with("review_m3.yu:5"))
+    }
+  }
+  match rb {
+    Ok(_) => assert(false)
+    Err(eb) => {
+      assert_eq(eb.trace().len(), 2)
+      assert(eb.trace()[1].ends_with("review_m3.yu:7"))
+    }
+  }
+  match rc {
+    Ok(_) => assert(false)
+    Err(ec) => {
+      assert_eq(ec.trace().len(), 3)
+      assert(ec.trace()[2].ends_with("review_m3.yu:10"))
+    }
+  }
+  assert_eq(e.trace(), [])
+}
+
+test "anonymous functions inside generic instances" {
+  assert_eq(mapped([1]), [1])
+  assert_eq(mapped(["a"]), ["a"])
+  assert_eq(keep_if([1, 2, 1], 1), [1, 1])
+  assert_eq(keep_if(["x", "y"], "y"), ["y"])
+}

@@ -1,0 +1,3 @@
+ok   trace records where an error was created and propagated
+ok   a value never wrapped in Err has an empty trace
+2 tests, 0 failed

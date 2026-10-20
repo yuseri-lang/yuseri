@@ -24,7 +24,17 @@ typedef struct {
   // Yuseri bindings in scope, innermost last; each gets a unique C name
   struct { Str name; const char *cname; } *binds;
   int nbinds, cbinds;
+  // generic instance being generated: parameter names and their concrete types
+  StrVec *sub_names;
+  TyVec *sub_binds;
+  StrVec instances;  // generated generic instances (C names)
 } G;
+
+// Applies the current generic substitution to a type from the checked AST.
+static Ty *sub(G *g, Ty *t) {
+  if (!t || !g->sub_names) return t;
+  return ty_subst(g->a, t, g->sub_names, g->sub_binds);
+}
 
 static char *sfmt(G *g, const char *fmt, ...);
 
@@ -115,6 +125,7 @@ static Decl *find_decl(DeclVec *v, Str name) {
 // ---- types -------------------------------------------------------------
 
 static const char *mangle(G *g, Ty *t) {
+  t = sub(g, t);
   switch (t->kind) {
     case TY_INT: return "Int";
     case TY_FLOAT: return "Float";
@@ -165,6 +176,7 @@ static void emit_typedef_once(G *g, const char *name, const char *body) {
 }
 
 static void emit_type(G *g, Ty *t) {
+  t = sub(g, t);
   switch (t->kind) {
     case TY_LIST: emit_type(g, t->a); return;
     case TY_MAP: emit_type(g, t->a); emit_type(g, t->b); return;
@@ -227,8 +239,8 @@ static void emit_type(G *g, Ty *t) {
       const char *n = mangle(g, t);
       if (seen(&g->emitted_types, n)) return;
       mark(g, &g->emitted_types, n);
-      if (!t->decl) {  // builtin enum (ParseError): tag only
-        buf_printf(&g->types, "typedef struct { int tag; } yu_%s;\n", n);
+      if (!t->decl) {  // builtin enum (ParseError): tag and trace only
+        buf_printf(&g->types, "typedef struct { int tag; yu_list trace_; } yu_%s;\n", n);
         return;
       }
       Buf b = {0};
@@ -238,7 +250,7 @@ static void emit_type(G *g, Ty *t) {
         buf_printf(&b, "enum { yu_%s_%s = %d };\n", n, cs(g, v->name), i);
         if (v->fields.len) any_fields = true;
       }
-      buf_printf(&b, "typedef struct { int tag;");
+      buf_printf(&b, "typedef struct { int tag; yu_list trace_;");
       if (any_fields) {
         buf_puts(&b, " union {");
         for (int i = 0; i < t->decl->variants.len; i++) {
@@ -265,6 +277,7 @@ static void emit_type(G *g, Ty *t) {
 }
 
 static const char *ctype(G *g, Ty *t) {
+  t = sub(g, t);
   switch (t->kind) {
     case TY_INT: return "int64_t";
     case TY_FLOAT: return "double";
@@ -278,20 +291,25 @@ static const char *ctype(G *g, Ty *t) {
   }
 }
 
-static bool needs_copy(Ty *t) {
+static bool needs_copy_raw(Ty *t);
+static bool needs_copy(G *g, Ty *t) { return needs_copy_raw(sub(g, t)); }
+
+static bool needs_copy_raw(Ty *t) {
   switch (t->kind) {
     case TY_LIST: case TY_MAP: return true;
-    case TY_OPTION: return needs_copy(t->a);
-    case TY_RESULT: case TY_ENTRY: return needs_copy(t->a) || needs_copy(t->b);
+    case TY_OPTION: return needs_copy_raw(t->a);
+    case TY_RESULT: case TY_ENTRY: return needs_copy_raw(t->a) || needs_copy_raw(t->b);
     case TY_STRUCT:
       if (!t->decl) return false;
-      for (int i = 0; i < t->decl->params.len; i++) if (needs_copy(t->decl->params.items[i].ty)) return true;
+      for (int i = 0; i < t->decl->params.len; i++) if (needs_copy_raw(t->decl->params.items[i].ty)) return true;
+      for (int i = 0; i < t->args.len; i++) if (needs_copy_raw(t->args.items[i])) return true;
       return false;
     case TY_ENUM:
       if (!t->decl) return false;
       for (int i = 0; i < t->decl->variants.len; i++)
         for (int k = 0; k < t->decl->variants.items[i].fields.len; k++)
-          if (needs_copy(t->decl->variants.items[i].fields.items[k].ty)) return true;
+          if (needs_copy_raw(t->decl->variants.items[i].fields.items[k].ty)) return true;
+      for (int i = 0; i < t->args.len; i++) if (needs_copy_raw(t->args.items[i])) return true;
       return false;
     default: return false;
   }
@@ -302,6 +320,7 @@ static int map_kkind(Ty *k) { return k->kind == TY_INT ? 0 : 1; }
 // ---- helpers: eq, fmt, copy --------------------------------------------
 
 static const char *eq_fn(G *g, Ty *t) {
+  t = sub(g, t);
   const char *n = sfmt(g, "yu_eq_%s", mangle(g, t));
   if (seen(&g->eq_done, n)) return n;
   mark(g, &g->eq_done, n);
@@ -365,6 +384,7 @@ static const char *eq_fn(G *g, Ty *t) {
 
 // Appends the source-literal form of a value to a builder.
 static const char *fmt_fn(G *g, Ty *t) {
+  t = sub(g, t);
   const char *n = sfmt(g, "yu_fmt_%s", mangle(g, t));
   if (seen(&g->fmt_done, n)) return n;
   mark(g, &g->fmt_done, n);
@@ -426,6 +446,7 @@ static const char *fmt_fn(G *g, Ty *t) {
 
 // Deep copy for values that contain a List or Map (value semantics).
 static const char *copy_fn(G *g, Ty *t) {
+  t = sub(g, t);
   const char *n = sfmt(g, "yu_copy_%s", mangle(g, t));
   if (seen(&g->copy_done, n)) return n;
   mark(g, &g->copy_done, n);
@@ -437,32 +458,32 @@ static const char *copy_fn(G *g, Ty *t) {
     case TY_LIST: {
       const char *et = ctype(g, t->a);
       buf_printf(&b, "  yu_list r = yu_list_copy(v, sizeof(%s));\n", et);
-      if (needs_copy(t->a)) buf_printf(&b, "  for (int64_t i = 0; i < r.len; i++) ((%s *)r.p)[i] = %s(((%s *)r.p)[i]);\n", et, copy_fn(g, t->a), et);
+      if (needs_copy(g, t->a)) buf_printf(&b, "  for (int64_t i = 0; i < r.len; i++) ((%s *)r.p)[i] = %s(((%s *)r.p)[i]);\n", et, copy_fn(g, t->a), et);
       buf_puts(&b, "  return r;\n");
       break;
     }
     case TY_MAP: {
       const char *vt = ctype(g, t->b);
       buf_printf(&b, "  yu_map r = yu_map_copy(v, sizeof(%s));\n", vt);
-      if (needs_copy(t->b)) buf_printf(&b, "  for (int64_t i = 0; i < r.vals.len; i++) ((%s *)r.vals.p)[i] = %s(((%s *)r.vals.p)[i]);\n", vt, copy_fn(g, t->b), vt);
+      if (needs_copy(g, t->b)) buf_printf(&b, "  for (int64_t i = 0; i < r.vals.len; i++) ((%s *)r.vals.p)[i] = %s(((%s *)r.vals.p)[i]);\n", vt, copy_fn(g, t->b), vt);
       buf_puts(&b, "  return r;\n");
       break;
     }
     case TY_OPTION: buf_printf(&b, "  if (v.some) v.val = %s(v.val);\n  return v;\n", copy_fn(g, t->a)); break;
     case TY_RESULT:
-      if (needs_copy(t->a)) buf_printf(&b, "  if (v.ok) v.val = %s(v.val);\n", copy_fn(g, t->a));
-      if (needs_copy(t->b)) buf_printf(&b, "  if (!v.ok) v.err = %s(v.err);\n", copy_fn(g, t->b));
+      if (needs_copy(g, t->a)) buf_printf(&b, "  if (v.ok) v.val = %s(v.val);\n", copy_fn(g, t->a));
+      if (needs_copy(g, t->b)) buf_printf(&b, "  if (!v.ok) v.err = %s(v.err);\n", copy_fn(g, t->b));
       buf_puts(&b, "  return v;\n");
       break;
     case TY_ENTRY:
-      if (needs_copy(t->a)) buf_printf(&b, "  v.key = %s(v.key);\n", copy_fn(g, t->a));
-      if (needs_copy(t->b)) buf_printf(&b, "  v.value = %s(v.value);\n", copy_fn(g, t->b));
+      if (needs_copy(g, t->a)) buf_printf(&b, "  v.key = %s(v.key);\n", copy_fn(g, t->a));
+      if (needs_copy(g, t->b)) buf_printf(&b, "  v.value = %s(v.value);\n", copy_fn(g, t->b));
       buf_puts(&b, "  return v;\n");
       break;
     case TY_STRUCT:
       for (int i = 0; i < t->decl->params.len; i++) {
         Ty *ft = field_ty(g, t, &t->decl->params.items[i]);
-        if (needs_copy(ft)) buf_printf(&b, "  v.f_%s = %s(v.f_%s);\n", cs(g, t->decl->params.items[i].name), copy_fn(g, ft), cs(g, t->decl->params.items[i].name));
+        if (needs_copy(g, ft)) buf_printf(&b, "  v.f_%s = %s(v.f_%s);\n", cs(g, t->decl->params.items[i].name), copy_fn(g, ft), cs(g, t->decl->params.items[i].name));
       }
       buf_puts(&b, "  return v;\n");
       break;
@@ -471,7 +492,7 @@ static const char *copy_fn(G *g, Ty *t) {
         Variant *v = &t->decl->variants.items[i];
         for (int k = 0; k < v->fields.len; k++) {
           Ty *ft = ty_subst(g->a, v->fields.items[k].ty, &t->decl->generics, &t->args);
-          if (needs_copy(ft)) buf_printf(&b, "  if (v.tag == %d) v.u.v_%s.f_%s = %s(v.u.v_%s.f_%s);\n", i, cs(g, v->name), cs(g, v->fields.items[k].name), copy_fn(g, ft), cs(g, v->name), cs(g, v->fields.items[k].name));
+          if (needs_copy(g, ft)) buf_printf(&b, "  if (v.tag == %d) v.u.v_%s.f_%s = %s(v.u.v_%s.f_%s);\n", i, cs(g, v->name), cs(g, v->fields.items[k].name), copy_fn(g, ft), cs(g, v->name), cs(g, v->fields.items[k].name));
         }
       }
       buf_puts(&b, "  return v;\n");
@@ -532,7 +553,7 @@ static bool is_fresh(Expr *e) {
 // unless the expression is a fresh constructor: this keeps the value semantics of core.md.
 static const char *gen_value(G *g, Expr *e) {
   const char *v = gen_expr(g, e);
-  if (e->ty && needs_copy(e->ty) && !is_fresh(e)) return sfmt(g, "%s(%s)", copy_fn(g, e->ty), v);
+  if (e->ty && needs_copy(g, e->ty) && !is_fresh(e)) return sfmt(g, "%s(%s)", copy_fn(g, e->ty), v);
   return v;
 }
 
@@ -572,7 +593,7 @@ static const char *gen_if(G *g, Expr *e);
 static const char *gen_fn_expr(G *g, Expr *e);
 
 static const char *gen_expr(G *g, Expr *e) {
-  Ty *t = e->ty;
+  Ty *t = sub(g, e->ty);
   switch (e->kind) {
     case E_INT: return sfmt(g, "INT64_C(%s)", cs(g, e->text));
     case E_FLOAT: return cs(g, e->text);
@@ -586,7 +607,7 @@ static const char *gen_expr(G *g, Expr *e) {
         if (i < e->args.len) {
           Expr *x = e->args.items[i];
           const char *v = gen_expr(g, x);
-          if (x->ty->kind == TY_STRING) emit(g, "yu_sb_str(&%s, %s);", sb, v);
+          if (sub(g, x->ty)->kind == TY_STRING) emit(g, "yu_sb_str(&%s, %s);", sb, v);
           else emit(g, "%s(&%s, %s);", fmt_fn(g, x->ty), sb, v);
         }
       }
@@ -608,7 +629,7 @@ static const char *gen_expr(G *g, Expr *e) {
         return sfmt(g, "(%s){ .tag = yu_%s_%s }", ctype(g, t), mangle(g, t), cs(g, e->text));
       }
       const char *o = gen_place(g, obj);
-      if (obj->ty->kind == TY_ENTRY) return sfmt(g, "%s.%s", o, cs(g, e->text));
+      if (sub(g, obj->ty)->kind == TY_ENTRY) return sfmt(g, "%s.%s", o, cs(g, e->text));
       return sfmt(g, "%s.f_%s", o, cs(g, e->text));
     }
     case E_INDEX: {
@@ -644,7 +665,7 @@ static const char *gen_expr(G *g, Expr *e) {
       }
       const char *l = gen_expr(g, e->a);
       const char *r = gen_expr(g, e->b);
-      Ty *lt = e->a->ty;
+      Ty *lt = sub(g, e->a->ty);
       bool is_int = lt->kind == TY_INT, is_float = lt->kind == TY_FLOAT, is_str = lt->kind == TY_STRING;
       switch (op) {
         case T_PLUS: return is_int ? sfmt(g, "yu_add(%s, %s, %s)", l, r, loc(g, e->line)) : sfmt(g, "(%s + %s)", l, r);
@@ -669,7 +690,9 @@ static const char *gen_expr(G *g, Expr *e) {
       Expr *x = e->a;
       const char *v = gen_temp(g, x);
       Ty *ret = g->fn_ret;
-      if (x->ty->kind == TY_RESULT) {
+      Ty *xt = sub(g, x->ty);
+      if (xt->kind == TY_RESULT) {
+        if (xt->b->kind == TY_ENUM) emit(g, "if (!%s.ok) yu_trace_add(&%s.err.trace_, %s);", v, v, loc(g, e->line));
         emit(g, "if (!%s.ok) return (%s){ .ok = false, .err = %s.err };", v, ctype(g, ret), v);
       } else {
         emit(g, "if (!%s.some) return (%s){false};", v, ctype(g, ret));
@@ -738,7 +761,7 @@ static const char *gen_place(G *g, Expr *e) {
 // Assigns the value of `e` to `target` (or evaluates it when target is NULL / type is Never).
 static void gen_assign_value(G *g, Expr *e, const char *target, Ty *ty) {
   const char *v = gen_expr(g, e);
-  if (!target || !ty || ty->kind == TY_UNIT || ty->kind == TY_NEVER || (e->ty && e->ty->kind == TY_NEVER)) {
+  if (!target || !ty || ty->kind == TY_UNIT || ty->kind == TY_NEVER || (e->ty && sub(g, e->ty)->kind == TY_NEVER)) {
     if (e->kind != E_IF && e->kind != E_MATCH && e->kind != E_BLOCK) emit(g, "(void)(%s);", v);
     return;
   }
@@ -762,7 +785,7 @@ static void gen_block_into(G *g, Block *b, const char *target, Ty *ty) {
 }
 
 static const char *gen_if(G *g, Expr *e) {
-  Ty *t = e->ty;
+  Ty *t = sub(g, e->ty);
   bool has_value = t->kind != TY_UNIT && t->kind != TY_NEVER && (e->else_block || e->else_if);
   const char *r = NULL;
   if (has_value) { r = newtmp(g); emit(g, "%s %s;", ctype(g, t), r); }
@@ -929,8 +952,8 @@ static void pat_bind(G *g, Pattern *p, const char *subj, Ty *t) {
 }
 
 static const char *gen_match(G *g, Expr *e) {
-  Ty *t = e->ty;
-  Ty *st = e->a->ty;
+  Ty *t = sub(g, e->ty);
+  Ty *st = sub(g, e->a->ty);
   const char *subj = gen_temp(g, e->a);
   bool has_value = t->kind != TY_UNIT && t->kind != TY_NEVER;
   const char *r = NULL;
@@ -965,10 +988,14 @@ static const char *gen_match(G *g, Expr *e) {
 }
 
 // Anonymous function: a static C function taking its environment first.
+static const char *mangle_binds(G *g, TyVec *binds);
+
 static const char *gen_fn_expr(G *g, Expr *e) {
-  Ty *ft = e->ty;
-  const char *name = sfmt(g, "yu_anon_%d", e->id);
-  const char *env_t = sfmt(g, "struct yu_env_%d", e->id);
+  Ty *ft = sub(g, e->ty);
+  // inside a generic instance the same anonymous function is generated once per instance
+  const char *inst = g->sub_names ? mangle_binds(g, g->sub_binds) : "";
+  const char *name = sfmt(g, "yu_anon_%d%s", e->id, inst);
+  const char *env_t = sfmt(g, "struct yu_env_%d%s", e->id, inst);
   // environment struct
   Buf env = {0};
   buf_printf(&env, "%s {", env_t);
@@ -1053,8 +1080,8 @@ static const char *gen_builtin(G *g, Expr *e) {
   Expr *callee = e->a;
   Expr *obj = callee->a;
   Str name = callee->text;
-  Ty *rt = obj->ty;
-  Ty *t = e->ty;
+  Ty *rt = sub(g, obj->ty);
+  Ty *t = sub(g, e->ty);
   const char *L = loc(g, e->line);
 #define IS(n) str_eq_c(name, n)
   switch (rt->kind) {
@@ -1163,7 +1190,7 @@ static const char *gen_builtin(G *g, Expr *e) {
       break;
     }
     case TY_ENUM:
-      if (IS("trace")) { (void)gen_expr(g, obj); return "yu_list_new(sizeof(yu_str))"; }
+      if (IS("trace")) { const char *o = gen_temp(g, obj); return sfmt(g, "yu_list_copy(%s.trace_, sizeof(yu_str))", o); }
       break;
     case TY_STRING: {
       const char *s = gen_expr(g, obj);
@@ -1197,15 +1224,34 @@ static const char *gen_builtin(G *g, Expr *e) {
   return "YU_UNIT";
 }
 
+static void gen_fn_instance(G *g, Decl *d, Ty *self_type, StrVec *names, TyVec *binds, const char *cname);
+
+// Joins the mangled names of `binds` for an instance name.
+static const char *mangle_binds(G *g, TyVec *binds) {
+  Buf b = {0};
+  for (int i = 0; i < binds->len; i++) buf_printf(&b, "_%s", mangle(g, binds->items[i]));
+  const char *r = arena_cstr(g->a, str_from(b.p ? b.p : "", b.len));
+  buf_free(&b);
+  return r;
+}
+
 static const char *gen_call(G *g, Expr *e) {
   Expr *f = e->a;
-  Ty *t = e->ty;
+  Ty *t = sub(g, e->ty);
   switch (e->call_kind) {
     case CK_PRELUDE: {
       Str n = f->text;
       if (str_eq_c(n, "Some")) return sfmt(g, "(%s){ .some = true, .val = %s }", ctype(g, t), gen_value(g, e->args.items[0]));
       if (str_eq_c(n, "Ok")) return sfmt(g, "(%s){ .ok = true, .val = %s }", ctype(g, t), gen_value(g, e->args.items[0]));
-      if (str_eq_c(n, "Err")) return sfmt(g, "(%s){ .ok = false, .err = %s }", ctype(g, t), gen_value(g, e->args.items[0]));
+      if (str_eq_c(n, "Err")) {
+        if (t->kind == TY_RESULT && t->b->kind == TY_ENUM) {
+          const char *ev = newtmp(g);
+          emit(g, "%s %s = %s;", ctype(g, t->b), ev, gen_value(g, e->args.items[0]));
+          emit(g, "yu_trace_add(&%s.trace_, %s);", ev, loc(g, e->line));
+          return sfmt(g, "(%s){ .ok = false, .err = %s }", ctype(g, t), ev);
+        }
+        return sfmt(g, "(%s){ .ok = false, .err = %s }", ctype(g, t), gen_value(g, e->args.items[0]));
+      }
       if (str_eq_c(n, "assert")) {
         const char *c = gen_expr(g, e->args.items[0]);
         emit(g, "yu_assert(%s, %s, \"assert\");", c, loc(g, e->line));
@@ -1214,7 +1260,7 @@ static const char *gen_call(G *g, Expr *e) {
       if (str_eq_c(n, "assert_eq")) {
         Expr *x = e->args.items[0], *y = e->args.items[1];
         const char *a = gen_temp(g, x), *b = gen_temp(g, y);
-        Ty *vt = x->ty->kind == TY_ERR || x->ty->kind == TY_NEVER ? y->ty : x->ty;
+        Ty *vt = sub(g, x->ty)->kind == TY_ERR || sub(g, x->ty)->kind == TY_NEVER ? sub(g, y->ty) : sub(g, x->ty);
         emit(g, "if (!%s(%s, %s)) { yu_sb l_ = {0}, r_ = {0}; %s(&l_, %s); %s(&r_, %s); yu_assert_eq_fail(%s, yu_sb_finish(&l_), yu_sb_finish(&r_)); }",
              eq_fn(g, vt), a, b, fmt_fn(g, vt), a, fmt_fn(g, vt), b, loc(g, e->line));
         return "YU_UNIT";
@@ -1226,11 +1272,32 @@ static const char *gen_call(G *g, Expr *e) {
       }
       break;
     }
-    case CK_FN: return sfmt(g, "%s(%s)", fn_cname(g, f->text), gen_args(g, e, NULL));
+    case CK_FN: {
+      Decl *d = find_decl(&g->fns, f->text);
+      if (d && d->generics.len) {
+        TyVec binds = {0};
+        for (int i = 0; i < e->type_args.len; i++) { Ty *b = sub(g, (Ty *)e->type_args.items[i]); VEC_PUSH(g->a, &binds, b); }
+        const char *cname = sfmt(g, "%s_%s", fn_cname(g, d->name), mangle_binds(g, &binds));
+        gen_fn_instance(g, d, NULL, &d->generics, &binds, cname);
+        return sfmt(g, "%s(%s)", cname, gen_args(g, e, NULL));
+      }
+      return sfmt(g, "%s(%s)", fn_cname(g, f->text), gen_args(g, e, NULL));
+    }
     case CK_METHOD: {
       Decl *m = e->method;
+      Ty *recv = sub(g, f->a->ty);
       const char *self = gen_value(g, f->a);
-      return sfmt(g, "%s(%s)", method_cname(g, f->a->ty->name, m->name), gen_args(g, e, self));
+      if (recv->args.len || m->generics.len) {
+        // instance per receiver type arguments and method type arguments
+        StrVec names = {0};
+        TyVec binds = {0};
+        for (int i = 0; i < recv->decl->generics.len; i++) { VEC_PUSH(g->a, &names, recv->decl->generics.items[i]); VEC_PUSH(g->a, &binds, recv->args.items[i]); }
+        for (int i = 0; i < m->generics.len; i++) { VEC_PUSH(g->a, &names, m->generics.items[i]); Ty *b = sub(g, (Ty *)e->type_args.items[i]); VEC_PUSH(g->a, &binds, b); }
+        const char *cname = sfmt(g, "%s_%s", method_cname(g, recv->name, m->name), mangle_binds(g, &binds));
+        gen_fn_instance(g, m, recv, &names, &binds, cname);
+        return sfmt(g, "%s(%s)", cname, gen_args(g, e, self));
+      }
+      return sfmt(g, "%s(%s)", method_cname(g, recv->name, m->name), gen_args(g, e, self));
     }
     case CK_VALUE: {
       const char *c = gen_temp(g, f);
@@ -1250,8 +1317,8 @@ static const char *gen_call(G *g, Expr *e) {
         const char *sb = newtmp(g);
         emit(g, "yu_sb %s = {0};", sb);
         const char *v = gen_expr(g, x);
-        if (x->ty->kind == TY_INT) emit(g, "yu_sb_int(&%s, %s);", sb, v);
-        else if (x->ty->kind == TY_FLOAT) emit(g, "yu_sb_float(&%s, %s);", sb, v);
+        if (sub(g, x->ty)->kind == TY_INT) emit(g, "yu_sb_int(&%s, %s);", sb, v);
+        else if (sub(g, x->ty)->kind == TY_FLOAT) emit(g, "yu_sb_float(&%s, %s);", sb, v);
         else emit(g, "yu_sb_bool(&%s, %s);", sb, v);
         return sfmt(g, "yu_sb_finish(&%s)", sb);
       }
@@ -1282,7 +1349,7 @@ static void gen_stmts(G *g, Block *b) {
     switch (s->kind) {
       case S_LET: {
         if (str_eq_c(s->name, "_")) { const char *v = gen_expr(g, s->value); emit(g, "(void)(%s);", v); break; }
-        if (s->ty->kind == TY_UNIT || s->ty->kind == TY_NEVER) {
+        if (sub(g, s->ty)->kind == TY_UNIT || sub(g, s->ty)->kind == TY_NEVER) {
           const char *v = gen_expr(g, s->value);
           emit(g, "(void)(%s);", v);
           const char *cn = bind_new(g, s->name);
@@ -1307,7 +1374,7 @@ static void gen_stmts(G *g, Block *b) {
       }
       case S_RETURN:
         if (s->value) {
-          if (g->fn_ret->kind == TY_UNIT) { const char *v = gen_expr(g, s->value); emit(g, "(void)(%s);", v); emit(g, "return YU_UNIT;"); }
+          if (sub(g, g->fn_ret)->kind == TY_UNIT) { const char *v = gen_expr(g, s->value); emit(g, "(void)(%s);", v); emit(g, "return YU_UNIT;"); }
           else { const char *v = gen_value(g, s->value); emit(g, "return %s;", v); }
         } else emit(g, "return YU_UNIT;");
         break;
@@ -1353,10 +1420,35 @@ static void gen_stmts(G *g, Block *b) {
 
 // ---- declarations ------------------------------------------------------
 
+static void gen_fn_named(G *g, Decl *d, const char *name);
+
 static void gen_fn_decl(G *g, Decl *d, Ty *self_type) {
-  Ty *ft = d->ty;
+  gen_fn_named(g, d, self_type ? method_cname(g, self_type->name, d->name) : fn_cname(g, d->name));
+}
+
+// Generates one instance of a generic function or method under the substitution names -> binds.
+static void gen_fn_instance(G *g, Decl *d, Ty *self_type, StrVec *names, TyVec *binds, const char *cname) {
+  (void)self_type;
+  if (seen(&g->instances, cname)) return;
+  mark(g, &g->instances, cname);
+  Buf *saved_out = g->out;
+  Ty *saved_ret = g->fn_ret;
+  int saved_indent = g->indent;
+  StrVec *saved_names = g->sub_names;
+  TyVec *saved_binds = g->sub_binds;
+  g->sub_names = names;
+  g->sub_binds = binds;
+  gen_fn_named(g, d, cname);
+  g->sub_names = saved_names;
+  g->sub_binds = saved_binds;
+  g->out = saved_out;
+  g->fn_ret = saved_ret;
+  g->indent = saved_indent;
+}
+
+static void gen_fn_named(G *g, Decl *d, const char *name) {
+  Ty *ft = sub(g, d->ty);
   Buf sig = {0};
-  const char *name = self_type ? method_cname(g, self_type->name, d->name) : fn_cname(g, d->name);
   int fn_mark = scope_push(g);
   buf_printf(&sig, "static %s %s(", ctype(g, ft->ret), name);
   const char **pnames = arena_alloc(g->a, sizeof(char *) * (size_t)(d->params.len + 1));
@@ -1369,6 +1461,7 @@ static void gen_fn_decl(G *g, Decl *d, Ty *self_type) {
   buf_puts(&sig, ")");
   buf_printf(&g->protos, "%s;\n", sig.p);
   Buf body = {0};
+  Buf *outer_out = g->out;  // non-NULL while generating an instance from inside another body
   g->out = &body;
   g->fn_ret = ft->ret;
   g->indent = 1;
@@ -1384,7 +1477,7 @@ static void gen_fn_decl(G *g, Decl *d, Ty *self_type) {
   buf_free(&sig);
   buf_free(&body);
   scope_pop(g, fn_mark);
-  g->out = NULL;
+  g->out = outer_out;
 }
 
 void cgen_module(Arena *a, Module *m, bool tests, Buf *out) {

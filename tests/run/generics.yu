@@ -1,0 +1,59 @@
+// User-defined generics: functions, structs, enums, methods on generic types
+struct Pair<A, B> { left: A, right: B }
+
+enum Maybe<T> { Just(value: T), Nothing }
+
+fn first<T>(xs: List<T>) -> Option<T> { xs.get(0) }
+
+fn swap<A, B>(p: Pair<A, B>) -> Pair<B, A> { Pair { left: p.right, right: p.left } }
+
+fn or_else<T>(m: Maybe<T>, fallback: T) -> T {
+  match m {
+    Maybe.Just(value: v) => v
+    Maybe.Nothing => fallback
+  }
+}
+
+fn count_matching<T>(xs: List<T>, wanted: T) -> Int {
+  var n = 0
+  for x in xs {
+    if x == wanted { n = n + 1 }
+  }
+  n
+}
+
+fn describe<T>(x: T) -> String { "<{x}>" }
+
+impl Pair {
+  fn flip(self) -> Pair<B, A> { swap(self) }
+}
+
+test "generic functions are instantiated per type" {
+  assert_eq(first([3, 4]), Some(3))
+  assert_eq(first(["a"]), Some("a"))
+  assert_eq(first(List<Int>()), None)
+  assert_eq(count_matching([1, 2, 1], 1), 2)
+  assert_eq(count_matching(["x", "y"], "z"), 0)
+  assert_eq(describe(7), "<7>")
+  assert_eq(describe("s"), "<s>")
+  assert_eq(describe([1, 2]), "<[1, 2]>")
+}
+
+test "generic structs and enums" {
+  let p = Pair { left: 1, right: "one" }
+  assert_eq(p.left, 1)
+  assert_eq(p.right, "one")
+  let q = swap(p)
+  assert_eq(q.left, "one")
+  assert_eq(q.right, 1)
+  assert_eq(p.flip().left, "one")
+  assert_eq("{p}", "Pair \{ left: 1, right: \"one\" \}")
+  let m = Maybe.Just(value: 5)
+  assert_eq(or_else(m, 0), 5)
+  assert_eq(or_else(Maybe.Nothing, 9), 9)
+  assert_eq("{m}", "Maybe.Just(value: 5)")
+  let nested = Pair { left: [1], right: Maybe.Just(value: [2]) }
+  var inner = nested.left
+  inner.push(3)
+  assert_eq(nested.left, [1])
+}

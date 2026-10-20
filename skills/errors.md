@@ -51,6 +51,10 @@ Every error is one line: `<ID> <file>:<line> <message>; <fix hint>`. When a decl
 
 - **E-JSON-01** type cannot be converted to or from JSON (an enum variant with fields, a `Map` with non-String keys, a function, or `Bytes`). Fix: use structs, lists, `Map<String, V>`, Int, Float, Bool, String, Option and field-less enums only.
 
+## E-STORE: Store
+
+- **E-STORE-01** type cannot live in a Store (it contains a function, a Store or a capability). Fix: keep only plain data in a Store: structs, lists, maps, Int, Float, Bool, String, Option and enums.
+
 ## R-INT: integers
 
 - **R-INT-01** integer overflow. Fix: check the range before the operation, or use `Float`.
@@ -72,6 +76,10 @@ Every error is one line: `<ID> <file>:<line> <message>; <fix hint>`. When a decl
 ## R-HTTP: std.http
 
 - **R-HTTP-01** the server cannot create a socket, bind or listen on the port. Fix: check that the port is free and below 65536.
+
+## R-STORE: Store
+
+- **R-STORE-01** the function passed to `update` panicked (its own error line comes first). The stored value is unchanged and the request fails. Fix: make the update function total, or validate before calling `update`.
 
 ## R-APP: application errors
 

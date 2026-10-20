@@ -16,6 +16,7 @@ typedef enum {
   TY_ENUM,    // decl (NULL for builtin enums such as ParseError)
   TY_FN,      // params, ret
   TY_PARAM,   // generic parameter named `name`
+  TY_STORE,   // a = value type (layer 2 Store<T>)
   TY_ERR,     // unknown after an error: compatible with everything, never reported again
 } TyKind;
 
@@ -38,6 +39,7 @@ Ty *ty_map(Arena *a, Ty *k, Ty *v);
 Ty *ty_option(Arena *a, Ty *v);
 Ty *ty_result(Arena *a, Ty *ok, Ty *err);
 Ty *ty_entry(Arena *a, Ty *k, Ty *v);
+Ty *ty_store(Arena *a, Ty *v);
 Ty *ty_fn(Arena *a, TyVec params, Ty *ret);
 Ty *ty_param(Arena *a, Str name);
 Ty *ty_named(Arena *a, TyKind k, Str name, Decl *decl);

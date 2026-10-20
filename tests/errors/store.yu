@@ -1,0 +1,12 @@
+// E-STORE-01: only plain data lives in a Store
+struct Handler { run: fn(Int) -> Int }
+
+fn bad_fn() -> Store<fn(Int) -> Int> { Store.new(fn(x: Int) -> Int { x }) }
+
+fn bad_struct() -> Store<Handler> { Store.new(Handler { run: fn(x: Int) -> Int { x } }) }
+
+fn bad_nested() -> Store<Store<Int>> { Store.new(Store.new(1)) }
+
+fn compare(a: Store<Int>, b: Store<Int>) -> Bool { a == b }
+
+fn ok() -> Store<List<Int>> { Store.new([1]) }

@@ -26,6 +26,23 @@ void yu_arena_reset(void);
 typedef struct { void *chunk; size_t used; } yu_arena_mark;
 yu_arena_mark yu_arena_mark_now(void);        // everything allocated after the mark...
 void yu_arena_release(yu_arena_mark m);       // ...is freed here (request = arena)
+typedef struct yu_arena yu_arena;             // a separate arena (used by Store)
+yu_arena *yu_arena_new(void);
+void yu_arena_free(yu_arena *a);
+yu_arena *yu_arena_use(yu_arena *a);          // makes `a` current for yu_alloc; returns the previous one
+
+// ---- Store<T>: the one place that outlives requests (layer 2, ADR-0009)
+typedef struct {
+  void *value;      // T, allocated in `arena`
+  int64_t vsz;
+  yu_arena *arena;  // owns `value` and everything it points to
+} yu_store;
+yu_store *yu_store_new(int64_t vsz);
+// update protocol: begin switches allocation to a fresh arena so the generated code can deep-copy
+// the new value into it; commit installs that copy and frees the previous arena; abort discards it.
+yu_arena *yu_store_begin(yu_store *s);
+void yu_store_commit(yu_store *s, const void *copied, yu_arena *prev);
+void yu_store_abort(yu_store *s, yu_arena *prev);
 
 // ---- catching failures: yu_fail unwinds to the innermost active catch
 #define yu_catch_begin() (yu_catch_push(), setjmp(*yu_catch_buf()) == 0)

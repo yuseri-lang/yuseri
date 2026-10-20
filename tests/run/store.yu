@@ -1,0 +1,64 @@
+// Store<T>: state that outlives a request. get copies, update replaces atomically.
+import std.http
+
+struct Counter { hits: Int, names: List<String> }
+
+fn handle(req: Request, state: Store<Counter>) -> Response {
+  state.update(fn(c: Counter) -> Counter {
+    var names = c.names
+    names.push(req.path)
+    Counter { hits: c.hits + 1, names: names }
+  })
+  let now = state.get()
+  http.response(200, "hit {now.hits}")
+}
+
+fn main() -> Unit {
+  let state = Store.new(Counter { hits: 0, names: [] })
+  http.serve(8080, fn(req: Request) -> Response { handle(req, state) })
+}
+
+test "state survives across requests" {
+  let state = Store.new(Counter { hits: 0, names: [] })
+  assert_eq(handle(http.request("GET", "/a", ""), state).body, "hit 1")
+  assert_eq(handle(http.request("GET", "/b", ""), state).body, "hit 2")
+  let c = state.get()
+  assert_eq(c.hits, 2)
+  assert_eq(c.names, ["/a", "/b"])
+}
+
+test "get returns a copy" {
+  let state = Store.new(Counter { hits: 0, names: ["x"] })
+  var copy = state.get()
+  copy.names.push("y")
+  copy.hits = 9
+  assert_eq(state.get().names, ["x"])
+  assert_eq(state.get().hits, 0)
+}
+
+test "set replaces and update sees the latest value" {
+  let n = Store.new(1)
+  n.set(5)
+  n.update(fn(v: Int) -> Int { v * 2 })
+  assert_eq(n.get(), 10)
+  let tags = Store.new(List<String>())
+  tags.update(fn(t: List<String>) -> List<String> {
+    var t2 = t
+    t2.push("a")
+    t2
+  })
+  tags.update(fn(t: List<String>) -> List<String> {
+    var t2 = t
+    t2.push("b")
+    t2
+  })
+  assert_eq(tags.get(), ["a", "b"])
+  assert_eq("{tags}", "Store")
+}
+
+// This test is expected to fail: a panic inside update stops the request after R-STORE-01.
+test "a panicking update stops the request with R-STORE-01" {
+  let n = Store.new(3)
+  n.update(fn(v: Int) -> Int { panic("boom {v}") })
+  assert_eq(n.get(), 3)
+}

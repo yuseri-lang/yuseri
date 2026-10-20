@@ -138,6 +138,7 @@ static const char *mangle(G *g, Ty *t) {
     case TY_OPTION: return sfmt(g, "Opt_%s_", mangle(g, t->a));
     case TY_RESULT: return sfmt(g, "Res_%s_%s_", mangle(g, t->a), mangle(g, t->b));
     case TY_ENTRY: return sfmt(g, "Ent_%s_%s_", mangle(g, t->a), mangle(g, t->b));
+    case TY_STORE: return sfmt(g, "Store_%s_", mangle(g, t->a));
     case TY_STRUCT: case TY_ENUM: {
       Buf b = {0};
       buf_printf(&b, "S_%s", cs(g, t->name));
@@ -289,6 +290,7 @@ static const char *ctype(G *g, Ty *t) {
     case TY_UNIT: case TY_NEVER: case TY_ERR: case TY_PARAM: return "yu_unit";
     case TY_LIST: return "yu_list";
     case TY_MAP: return "yu_map";
+    case TY_STORE: emit_type(g, t->a); return "yu_store *";
     default: emit_type(g, t); return sfmt(g, "yu_%s", mangle(g, t));
   }
 }
@@ -334,7 +336,7 @@ static const char *eq_fn(G *g, Ty *t) {
     case TY_INT: case TY_FLOAT: case TY_BOOL: buf_puts(&b, "  return a == b;\n"); break;
     case TY_STRING: buf_puts(&b, "  return yu_str_eq(a, b);\n"); break;
     case TY_BYTES: buf_puts(&b, "  return a.len == b.len && (a.len == 0 || memcmp(a.p, b.p, (size_t)a.len) == 0);\n"); break;
-    case TY_UNIT: case TY_NEVER: case TY_ERR: case TY_PARAM: case TY_FN: buf_puts(&b, "  (void)a; (void)b; return true;\n"); break;
+    case TY_UNIT: case TY_NEVER: case TY_ERR: case TY_PARAM: case TY_FN: case TY_STORE: buf_puts(&b, "  (void)a; (void)b; return true;\n"); break;
     case TY_LIST: {
       const char *et = ctype(g, t->a);
       buf_printf(&b, "  if (a.len != b.len) return false;\n  for (int64_t i = 0; i < a.len; i++) if (!%s(((%s *)a.p)[i], ((%s *)b.p)[i])) return false;\n  return true;\n", eq_fn(g, t->a), et, et);
@@ -402,6 +404,7 @@ static const char *fmt_fn(G *g, Ty *t) {
     case TY_BYTES: buf_puts(&b, "  yu_sb_cstr(b, \"Bytes(\"); yu_sb_int(b, v.len); yu_sb_cstr(b, \")\");\n"); break;
     case TY_UNIT: case TY_NEVER: case TY_ERR: case TY_PARAM: buf_puts(&b, "  (void)v; yu_sb_cstr(b, \"Unit\");\n"); break;
     case TY_FN: buf_puts(&b, "  (void)v; yu_sb_cstr(b, \"fn\");\n"); break;
+    case TY_STORE: buf_puts(&b, "  (void)v; yu_sb_cstr(b, \"Store\");\n"); break;
     case TY_LIST:
       buf_printf(&b, "  yu_sb_cstr(b, \"[\");\n  for (int64_t i = 0; i < v.len; i++) { if (i) yu_sb_cstr(b, \", \"); %s(b, ((%s *)v.p)[i]); }\n  yu_sb_cstr(b, \"]\");\n", fmt_fn(g, t->a), ctype(g, t->a));
       break;
@@ -1195,6 +1198,37 @@ static const char *gen_builtin(G *g, Expr *e) {
     case TY_ENUM:
       if (IS("trace")) { const char *o = gen_temp(g, obj); return sfmt(g, "yu_list_copy(%s.trace_, sizeof(yu_str))", o); }
       break;
+    case TY_STORE: {
+      Ty *T = rt->a;
+      const char *st = gen_temp(g, obj);
+      const char *tt = ctype(g, T);
+      if (IS("get")) {
+        // a copy into the caller's arena: nothing from the store's arena escapes
+        const char *r = newtmp(g);
+        if (needs_copy(g, T)) emit(g, "%s %s = %s(*(%s *)%s->value);", tt, r, copy_fn(g, T), tt, st);
+        else emit(g, "%s %s = *(%s *)%s->value;", tt, r, tt, st);
+        return r;
+      }
+      if (IS("set") || IS("update")) {
+        const char *nv = newtmp(g);
+        if (IS("set")) emit(g, "%s %s = %s;", tt, nv, gen_value(g, e->args.items[0]));
+        else {
+          const char *f = gen_temp(g, e->args.items[0]);
+          const char *cur = newtmp(g);
+          if (needs_copy(g, T)) emit(g, "%s %s = %s(*(%s *)%s->value);", tt, cur, copy_fn(g, T), tt, st);
+          else emit(g, "%s %s = *(%s *)%s->value;", tt, cur, tt, st);
+          emit(g, "%s %s;", tt, nv);
+          emit(g, "if (yu_catch_begin()) { %s = %s.fn(%s.env, %s); yu_catch_end(); } else { yu_fail(\"R-STORE-01\", %s, \"update function panicked; value unchanged\"); }", nv, f, f, cur, loc(g, e->line));
+        }
+        const char *prev = newtmp(g), *cp = newtmp(g);
+        emit(g, "yu_arena *%s = yu_store_begin(%s);", prev, st);
+        if (needs_copy(g, T)) emit(g, "%s %s = %s(%s);", tt, cp, copy_fn(g, T), nv);
+        else emit(g, "%s %s = %s;", tt, cp, nv);
+        emit(g, "yu_store_commit(%s, &%s, %s);", st, cp, prev);
+        return "YU_UNIT";
+      }
+      break;
+    }
     case TY_STRING: {
       const char *s = gen_expr(g, obj);
       if (IS("len")) return sfmt(g, "yu_str_len(%s)", s);
@@ -1467,6 +1501,17 @@ static const char *gen_call(G *g, Expr *e) {
         emit(g, "%s %s = {0};", ctype(g, t), r);
         emit(g, "%s.ok = yu_int_parse(%s, &%s.val);", r, gen_expr(g, e->args.items[0]), r);
         return r;
+      }
+      if (str_eq_c(tn, "Store")) {
+        Ty *T = t->a;
+        const char *v = gen_value(g, e->args.items[0]);
+        const char *st = newtmp(g), *prev = newtmp(g), *cp = newtmp(g);
+        emit(g, "yu_store *%s = yu_store_new(sizeof(%s));", st, ctype(g, T));
+        emit(g, "yu_arena *%s = yu_store_begin(%s);", prev, st);
+        if (needs_copy(g, T)) emit(g, "%s %s = %s(%s);", ctype(g, T), cp, copy_fn(g, T), v);
+        else emit(g, "%s %s = %s;", ctype(g, T), cp, v);
+        emit(g, "yu_store_commit(%s, &%s, %s);", st, cp, prev);
+        return st;
       }
       if (str_eq_c(tn, "Float")) return sfmt(g, "((double)%s)", gen_expr(g, e->args.items[0]));
       if (str_eq_c(tn, "String")) {

@@ -10,6 +10,7 @@ Yuseri is a statically typed language for backend services, designed to be writt
 ## Files
 
 - `core.md`: the language. Read it fully before writing any code.
+- `runtime.md`: state across requests (`Store`), the outside world (`System`), tasks. Read when the program keeps state or needs the network, clock, files or environment.
 - `stdlib/string.md`: String methods. Read when you touch strings.
 - `stdlib/<module>.md`: other modules (`http`, `json`, ...). Read only the one you import.
 - `errors.md`: one entry per error id. Read the entry named in an error message.

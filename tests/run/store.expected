@@ -1,0 +1,7 @@
+ok   state survives across requests
+ok   get returns a copy
+ok   set replaces and update sees the latest value
+R-PANIC-01 tests/run/store.yu:62 panic: boom 3; if the state is possible, return `Err` instead of `panic`
+R-STORE-01 tests/run/store.yu:62 update function panicked; value unchanged; the update function panicked; the stored value is unchanged
+fail a panicking update stops the request with R-STORE-01
+4 tests, 1 failed

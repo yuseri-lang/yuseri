@@ -762,6 +762,7 @@ static Ty *infer_inner(C *c, Expr *e, Ty *expected) {
       for (int i = 0; i < e->args.len; i++) infer(c, e->args.items[i], NULL);
       return ty_prim(TY_STRING);
     case E_IDENT: {
+      if (str_eq_c(e->text, "Unit")) { e->call_kind = CK_PRELUDE; return ty_prim(TY_UNIT); }
       if (str_eq_c(e->text, "None")) {
         if (expected && expected->kind == TY_OPTION) return expected;
         if (expected && ty_is_err(expected)) return ty_prim(TY_ERR);

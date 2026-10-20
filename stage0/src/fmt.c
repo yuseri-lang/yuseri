@@ -691,15 +691,21 @@ static void fmt_decl(F *f, Decl *d) {
 
 void fmt_module(Module *m, Buf *out) {
   F f = {.out = out, .m = m};
+  bool first = true;
+  Decl *prev = NULL;
   for (int i = 0; i < m->decls.len; i++) {
     Decl *d = m->decls.items[i];
-    bool imports = i > 0 && d->kind == D_IMPORT && m->decls.items[i - 1]->kind == D_IMPORT;
-    if (i > 0 && !imports) nl(&f);
+    if (d->from_std) continue;  // injected by the checker for std modules; not part of the source
+    bool imports = prev && d->kind == D_IMPORT && prev->kind == D_IMPORT;
+    if (!first && !imports) nl(&f);
+    first = false;
+    prev = d;
     comments_before(&f, d->line, false);
     fmt_decl(&f, d);
     trailing_comments(&f, d->end_line);
     nl(&f);
     f.last_line = d->end_line;
   }
+  (void)first;
   comments_before(&f, 1 << 30, true);
 }

@@ -27,6 +27,17 @@ for f in tests/run/*.yu; do
     fail=1
     continue
   fi
+  # the formatter and `check` must agree: a formatted copy passes check silently
+  tmp=$(mktemp -t yuseri).yu
+  cp "$f" "$tmp"
+  "$bin" fmt --write "$tmp"
+  chk=$("$bin" check "$tmp" 2>&1)
+  rm -f "$tmp"
+  if [ -n "$chk" ]; then
+    echo "FAIL    $f (check after fmt): $chk"
+    fail=1
+    continue
+  fi
   echo "ok      $f"
 done
 exit $fail

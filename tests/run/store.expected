@@ -5,4 +5,5 @@ ok   update returns the new value and try_update is conditional
 R-PANIC-01 tests/run/store.yu:78 panic: boom 3; if the state is possible, return `Err` instead of `panic`
 R-STORE-01 tests/run/store.yu:78 update function panicked; value unchanged; the update function panicked; the stored value is unchanged
 fail a panicking update stops the request with R-STORE-01
-5 tests, 1 failed
+ok   a try_update error keeps its data after the store moves on
+6 tests, 1 failed

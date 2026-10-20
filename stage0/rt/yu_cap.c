@@ -248,3 +248,5 @@ void yu_tasks_run(void) {
   }
   g_ntasks = 0;
 }
+
+void yu_tasks_clear(void) { g_ntasks = 0; }

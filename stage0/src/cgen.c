@@ -1360,7 +1360,10 @@ static const char *gen_builtin(G *g, Expr *e) {
           const char *f = gen_temp(g, e->args.items[0]);
           const char *cur = newtmp(g);
           emit(g, "yu_store_lock(%s, %s);", st, loc(g, e->line));
-          if (needs_copy(g, T)) emit(g, "%s %s = %s(*(%s *)%s->value);", tt, cur, copy_fn(g, T), tt, st);
+          // the value handed to `f` is relocated into the caller's arena: whatever `f` keeps
+          // of it (an Ok, an Err, a capture) must not point into the store's arena, which the
+          // next update frees (external review of L1-L4)
+          if (needs_reloc(g, T)) emit(g, "%s %s = %s(*(%s *)%s->value);", tt, cur, reloc_fn(g, T), tt, st);
           else emit(g, "%s %s = *(%s *)%s->value;", tt, cur, tt, st);
           if (IS("update")) {
             emit(g, "%s %s;", tt, nv);
@@ -1374,19 +1377,15 @@ static const char *gen_builtin(G *g, Expr *e) {
             g->indent++;
           }
         }
-        // the new value is relocated into a fresh arena (commit frees the old one, which the
-        // strings in `nv` may point into); the value handed back is relocated again into the
-        // caller's arena, since the store's arena can be freed by the next update
+        // the new value lives in the caller's arena (built from a relocated `cur` or fresh);
+        // it is relocated into a fresh store arena and commit frees the old one. The value
+        // handed back (`nv` / `res`) stays the caller's copy
         const char *prev = newtmp(g), *cp = newtmp(g);
         emit(g, "yu_arena *%s = yu_store_begin(%s);", prev, st);
         if (needs_reloc(g, T)) emit(g, "%s %s = %s(%s);", tt, cp, reloc_fn(g, T), nv);
         else emit(g, "%s %s = %s;", tt, cp, nv);
         emit(g, "yu_store_commit(%s, &%s, %s);", st, cp, prev);
-        if (IS("try_update")) {
-          if (needs_reloc(g, T)) emit(g, "%s.val = %s(%s);", res, reloc_fn(g, T), cp);
-          g->indent--;
-          emit(g, "}");
-        } else if (IS("update") && needs_reloc(g, T)) emit(g, "%s = %s(%s);", nv, reloc_fn(g, T), cp);
+        if (IS("try_update")) { g->indent--; emit(g, "}"); }
         emit(g, "yu_store_unlock(%s);", st);
         if (IS("try_update")) return res;
         if (IS("update")) return nv;

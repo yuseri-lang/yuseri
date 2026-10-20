@@ -67,7 +67,7 @@ static void trailing_comments(F *f, int end_line) {
 // ---- types -------------------------------------------------------------
 
 static void fmt_type(F *f, Type *t) {
-  if (t->kind == TY_FN) {
+  if (t->kind == TYPE_FN) {
     buf_puts(f->out, "fn(");
     for (int i = 0; i < t->args.len; i++) {
       if (i) buf_puts(f->out, ", ");

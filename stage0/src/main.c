@@ -1,4 +1,5 @@
 // Yuseri Stage 0: command line
+#include "check.h"
 #include "fmt.h"
 #include "lexer.h"
 #include "parser.h"
@@ -6,7 +7,7 @@
 static int usage(void) {
   fprintf(stderr,
           "usage: yuseri fmt [--write] <file.yu>...   print (or rewrite) in canonical layout\n"
-          "       yuseri check <file.yu>...           report E-FMT-01 when a file is not formatted\n"
+          "       yuseri check <file.yu>...           type-check and report every error; E-FMT-01 when not formatted\n"
           "       yuseri parse <file.yu>...           parse only and report errors\n");
   return 2;
 }
@@ -55,19 +56,35 @@ static int cmd_fmt(int argc, char **argv) {
   return rc;
 }
 
+// Lexes, parses and type-checks one file; errors are printed sorted by line.
+// The formatter check runs only when the file has no other error.
 static int cmd_check(int argc, char **argv) {
   if (argc == 0) return usage();
   int rc = 0;
   for (int i = 0; i < argc; i++) {
-    Buf out = {0};
-    Str orig;
-    if (!format_file(argv[i], &out, &orig)) { rc = 1; buf_free(&out); continue; }
-    if (!(orig.len == out.len && memcmp(orig.p, out.p, (size_t)out.len) == 0)) {
-      diag_error("E-FMT-01", argv[i], 1, "file is not formatted");
-      rc = 1;
+    Str src;
+    if (!read_file(argv[i], &src)) { fprintf(stderr, "yuseri: cannot read %s\n", argv[i]); rc = 1; continue; }
+    Arena a = {0};
+    diag_buffer(true);
+    int before = diag_count();
+    LexResult lx = lex(&a, argv[i], src);
+    int after_lex = diag_count();
+    Module *m = parse_module(&a, argv[i], lx);
+    int after_parse = diag_count();
+    bool syntax_ok = after_parse == after_lex;
+    if (syntax_ok) check_module(&a, m);
+    if (diag_count() == before) {
+      Buf out = {0};
+      fmt_module(m, &out);
+      if (!(src.len == out.len && memcmp(src.p, out.p, (size_t)out.len) == 0))
+        diag_error("E-FMT-01", argv[i], 1, "file is not formatted");
+      buf_free(&out);
     }
-    free((char *)orig.p);
-    buf_free(&out);
+    diag_flush();
+    diag_buffer(false);
+    if (diag_count() != before) rc = 1;
+    arena_free(&a);
+    free((char *)src.p);
   }
   return rc;
 }

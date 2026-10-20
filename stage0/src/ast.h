@@ -28,13 +28,13 @@ typedef VEC(PatField) PatFieldVec;
 typedef VEC(MatchArm) MatchArmVec;
 typedef VEC(Variant) VariantVec;
 
-typedef enum { TY_NAMED, TY_FN } TypeKind;
+typedef enum { TYPE_NAMED, TYPE_FN } TypeKind;
 struct Type {
   TypeKind kind;
   int line;
-  Str name;          // TY_NAMED
-  TypeVec args;      // TY_NAMED type arguments, TY_FN parameter types
-  Type *ret;         // TY_FN
+  Str name;          // TYPE_NAMED
+  TypeVec args;      // TYPE_NAMED type arguments, TYPE_FN parameter types
+  Type *ret;         // TYPE_FN
 };
 
 struct Param {
@@ -103,6 +103,7 @@ struct Expr {
   Expr *a, *b;          // operands / callee / object / condition
   ExprVec args;         // E_CALL args, E_LIST items
   StrVec arg_names;     // E_CALL: parallel to args; empty Str for a positional argument
+  StrVec segs;          // E_STRING: literal pieces (raw, escapes kept); segs.len == args.len + 1
   Block *block;         // E_IF then, E_FN body, E_BLOCK
   Block *else_block;    // E_IF else (NULL if none)
   Expr *else_if;        // E_IF: else-if chain (an E_IF), NULL if none

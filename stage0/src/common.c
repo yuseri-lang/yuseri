@@ -119,15 +119,57 @@ const char *diag_hint(const char *id) {
 }
 
 static int g_errors = 0;
+static bool g_buffer = false;
+
+typedef struct {
+  int line;
+  int seq;
+  char *text;
+} Diag;
+
+static Diag *g_diags = NULL;
+static int g_ndiags = 0, g_cdiags = 0;
 
 void diag_error(const char *id, const char *file, int line, const char *fmt, ...) {
   g_errors++;
-  fprintf(stderr, "%s %s:%d ", id, file, line);
+  char msg[1024];
   va_list ap;
   va_start(ap, fmt);
-  vfprintf(stderr, fmt, ap);
+  vsnprintf(msg, sizeof msg, fmt, ap);
   va_end(ap);
-  fprintf(stderr, "; %s\n", diag_hint(id));
+  if (!g_buffer) {
+    fprintf(stderr, "%s %s:%d %s; %s\n", id, file, line, msg, diag_hint(id));
+    return;
+  }
+  if (g_ndiags == g_cdiags) {
+    g_cdiags = g_cdiags ? g_cdiags * 2 : 16;
+    g_diags = realloc(g_diags, (size_t)g_cdiags * sizeof(Diag));
+  }
+  size_t n = strlen(id) + strlen(file) + strlen(msg) + strlen(diag_hint(id)) + 32;
+  char *text = malloc(n);
+  snprintf(text, n, "%s %s:%d %s; %s", id, file, line, msg, diag_hint(id));
+  g_diags[g_ndiags] = (Diag){line, g_ndiags, text};
+  g_ndiags++;
+}
+
+void diag_buffer(bool on) { g_buffer = on; }
+
+static int diag_cmp(const void *x, const void *y) {
+  const Diag *a = x, *b = y;
+  if (a->line != b->line) return a->line - b->line;
+  return a->seq - b->seq;
+}
+
+// Prints buffered errors sorted by line. Identical lines (same id, line and message) are
+// printed once: one mistake should produce one line.
+void diag_flush(void) {
+  qsort(g_diags, (size_t)g_ndiags, sizeof(Diag), diag_cmp);
+  for (int i = 0; i < g_ndiags; i++) {
+    bool dup = i > 0 && strcmp(g_diags[i].text, g_diags[i - 1].text) == 0;
+    if (!dup) fprintf(stderr, "%s\n", g_diags[i].text);
+  }
+  for (int i = 0; i < g_ndiags; i++) free(g_diags[i].text);
+  g_ndiags = 0;
 }
 
 int diag_count(void) { return g_errors; }

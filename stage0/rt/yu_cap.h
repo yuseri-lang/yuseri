@@ -40,6 +40,7 @@ yu_random *yu_random_seeded(int64_t seed);
 typedef yu_unit (*yu_task_fn)(void *env);
 void yu_tasks_spawn(yu_tasks *t, yu_task_fn fn, void *env, const char *loc);
 yu_tasks *yu_tasks_inline(void);
-void yu_tasks_run(void);  // runs and clears this worker's queue (called by the server)
+void yu_tasks_run(void);    // runs and clears this worker's queue (called by the server)
+void yu_tasks_clear(void);  // drops the queue without running it (the request failed)
 
 #endif

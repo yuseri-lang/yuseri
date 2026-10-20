@@ -78,3 +78,14 @@ test "a panicking update stops the request with R-STORE-01" {
   n.update(fn(v: Int) -> Int { panic("boom {v}") })
   assert_eq(n.get(), 3)
 }
+
+enum NameError { Bad(value: String) }
+
+test "a try_update error keeps its data after the store moves on" {
+  let s = Store.new("old")
+  let r = s.try_update(fn(v: String) -> Result<String, NameError> { Err(NameError.Bad(value: v)) })
+  s.set("new")
+  s.set("newer")
+  assert_eq(r, Err(NameError.Bad(value: "old")))
+  assert_eq(s.get(), "newer")
+}

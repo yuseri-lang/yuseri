@@ -43,6 +43,6 @@ Only `main` receives `System`; a capability cannot be stored in a `Store` or com
 | `Tasks` | `tasks.spawn(f: fn() -> Unit) -> Unit` (section 4) | `Tasks.inline() -> Tasks` runs `f` at once |
 
 ## 4. Tasks and deadlines
-`sys.tasks.spawn(fn() -> Unit { notify(mailer, order) })` runs `f` after the response is sent, with the same request id and deadline. `f` returns nothing; write results to a `Store`. A failure stops only that task (`R-TASK-01`). At most 64 tasks per request (`R-TASK-02`).
+`sys.tasks.spawn(fn() -> Unit { notify(mailer, order) })` runs `f` after the response is sent, with the same request id and deadline. `f` returns nothing; write results to a `Store`. A failure stops only that task (`R-TASK-01`); a request that fails drops its tasks. At most 64 tasks per request (`R-TASK-02`).
 
 Every request has a deadline: 30 seconds, or `deadline_ms` of `serve_with`. Past it, the next allocation, loop iteration or I/O fails with `R-TIME-01` and the client gets `500`. Under `http.serve` every stderr line, log or error, starts with the request id.

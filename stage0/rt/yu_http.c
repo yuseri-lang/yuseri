@@ -223,11 +223,13 @@ static void socket_timeout(int fd, int64_t ms) {
 
 // Handles one connection on the calling worker's arena. Everything from reading the request
 // to the handler's return runs under the deadline and inside one catch: a failure anywhere
-// answers 500 and the worker carries on.
-static void handle_connection(Server *sv, int fd, yu_arena *mine) {
+// answers 500 and the worker carries on. Exposed so tests can drive it through a socket pair.
+void yu_http_handle_connection(yu_http_handler h, int fd, int64_t deadline_ms) {
+  yu_arena *mine = yu_arena_use(NULL);  // the worker's arena, restored after a failure
+  yu_arena_use(mine);
   yu_arena_mark mark = yu_arena_mark_now();
-  yu_deadline_set(yu_now_ms() + sv->deadline_ms, sv->deadline_ms);
-  socket_timeout(fd, sv->deadline_ms);
+  yu_deadline_set(yu_now_ms() + deadline_ms, deadline_ms);
+  socket_timeout(fd, deadline_ms);
   char idbuf[32];
   snprintf(idbuf, sizeof idbuf, "req-%lld", (long long)(++g_counter));
   yu_request_id = yu_str_lit(idbuf, (int64_t)strlen(idbuf));
@@ -238,7 +240,7 @@ static void handle_connection(Server *sv, int fd, yu_arena *mine) {
     status = yu_http_read_request(fd, &req);
     if (status == 0) {
       req.f_id = dup_str(yu_request_id);
-      res = sv->h.fn(sv->h.env, req);
+      res = h.fn(h.env, req);
     }
     yu_catch_end();
   } else {
@@ -254,11 +256,15 @@ static void handle_connection(Server *sv, int fd, yu_arena *mine) {
   else if (status != 0) res = yu_http_response_text(status, yu_str_lit("bad request", 11));
   send_response(fd, res);
   close(fd);
-  // spawned tasks run now: after the answer, under the same deadline, before the arena goes
   if (status == 0) {
+    // spawned tasks run now: after the answer, under the same deadline, before the arena goes
     yu_deadline_set(at, len);
     yu_tasks_run();
     yu_deadline_set(0, 0);
+  } else {
+    // a failed request takes its tasks with it: their environments live in the arena that is
+    // released below, so running them later would read freed memory (external review)
+    yu_tasks_clear();
   }
   yu_request_id = yu_str_lit("main", 4);
   yu_arena_release(mark);
@@ -266,13 +272,12 @@ static void handle_connection(Server *sv, int fd, yu_arena *mine) {
 
 static void *worker_main(void *arg) {
   Server *sv = arg;
-  yu_arena *mine = yu_arena_new();
-  yu_arena_use(mine);
+  yu_arena_use(yu_arena_new());
   yu_serving = true;
   for (;;) {
     int fd = accept(sv->listen_fd, NULL, NULL);
     if (fd < 0) continue;
-    handle_connection(sv, fd, mine);
+    yu_http_handle_connection(sv->h, fd, sv->deadline_ms);
   }
   return NULL;
 }

@@ -22,6 +22,9 @@ void yu_http_serve(void *net, int64_t port, yu_http_handler h, int64_t deadline_
 #define YU_HTTP_DEFAULT_DEADLINE_MS 30000
 // Reads one request from a socket; exposed for tests. 0 = ok, else the status to answer.
 int yu_http_read_request(int fd, yu_http_request *req);
+// Serves one connection (read, handle, answer, run or discard its tasks, release); exposed
+// for tests. Runs on the current arena with yu_serving set by the caller.
+void yu_http_handle_connection(yu_http_handler h, int fd, int64_t deadline_ms);
 yu_http_response yu_http_response_text(int64_t status, yu_str body);
 yu_http_response yu_http_json(int64_t status, yu_str body);
 yu_http_request yu_http_request_make(yu_str method, yu_str path, yu_str body);

@@ -20,6 +20,8 @@ debug: clean $(BIN)
 
 test: $(BIN)
 	sh tests/run_golden.sh
+	sh tests/run_errors.sh
+	sh tests/check_errors.sh
 
 check-errors:
 	sh tests/check_errors.sh

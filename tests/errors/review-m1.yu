@@ -1,0 +1,28 @@
+// Review findings on M1: each function below must produce exactly one error,
+// and the last two must produce none.
+struct Box<T> { value: T }
+
+fn generic_box() -> Int {
+  let b = Box { value: "oops" }
+  b.value
+}
+
+fn never_branch(x: Bool) -> Int {
+  let a = if x { panic("stop") } else { "oops" }
+  a
+}
+
+fn loose_break() -> Unit { break }
+
+fn generic_box_ok() -> Int {
+  let b = Box { value: 1 }
+  b.value
+}
+
+fn never_branch_ok(x: Bool) -> Int {
+  let a = if x { panic("stop") } else { 2 }
+  match a {
+    2 => a
+    _ => panic("other")
+  }
+}

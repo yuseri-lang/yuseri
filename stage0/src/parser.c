@@ -73,7 +73,7 @@ static Type *new_type(P *p, TypeKind k) {
 
 static Type *parse_type(P *p) {
   if (at(p, T_FN)) {
-    Type *t = new_type(p, TY_FN);
+    Type *t = new_type(p, TYPE_FN);
     advance(p);
     expect(p, T_LPAREN, "`(`");
     while (!at(p, T_RPAREN) && !at(p, T_EOF)) {
@@ -86,7 +86,7 @@ static Type *parse_type(P *p) {
     t->ret = parse_type(p);
     return t;
   }
-  Type *t = new_type(p, TY_NAMED);
+  Type *t = new_type(p, TYPE_NAMED);
   t->name = ident(p);
   if (accept(p, T_LT)) {
     while (!at(p, T_GT) && !at(p, T_EOF)) {
@@ -241,12 +241,72 @@ static void parse_args(P *p, ExprVec *out, StrVec *names, TokKind close) {
   p->no_struct = saved;
 }
 
+// Splits a raw string literal into literal segments and embedded expressions.
+// `{expr}` is parsed with a sub-lexer; `\{` and `\}` stay in the segment text.
+static void parse_string_parts(P *p, Expr *e, Str raw, int line) {
+  int seg_start = 0;
+  int i = 0;
+  while (i < raw.len) {
+    char c = raw.p[i];
+    if (c == '\\') { i += 2; continue; }
+    if (c == '{') {
+      int depth = 1, j = i + 1;
+      while (j < raw.len && depth > 0) {
+        if (raw.p[j] == '{') depth++;
+        else if (raw.p[j] == '}') depth--;
+        if (depth > 0) j++;
+      }
+      Str seg = str_from(raw.p + seg_start, i - seg_start);
+      VEC_PUSH(p->a, &e->segs, seg);
+      Str inner = str_from(raw.p + i + 1, j - i - 1);
+      LexResult lx = lex_at(p->a, p->file, inner, line);
+      P sub = {.a = p->a, .file = p->file, .t = lx.toks.items, .i = 0, .n = lx.toks.len};
+      Expr *x = parse_expr(&sub);
+      if (sub.t[sub.i].kind != T_NEWLINE && sub.t[sub.i].kind != T_EOF)
+        diag_error("E-SYN-01", p->file, line, "unexpected %s inside interpolation", tok_name(sub.t[sub.i].kind));
+      VEC_PUSH(p->a, &e->args, x);
+      i = j + 1;
+      seg_start = i;
+      continue;
+    }
+    i++;
+  }
+  Str last = str_from(raw.p + seg_start, raw.len - seg_start);
+  VEC_PUSH(p->a, &e->segs, last);
+}
+
+// True when the tokens at `<` look like generic arguments followed by `(`:
+// `List<Int>(`, `Map<String, fn(Int) -> Int>(`. `MAX < 200` is a comparison.
+static bool looks_like_type_args(P *p) {
+  int i = p->i;
+  if (p->t[i].kind != T_LT) return false;
+  int depth = 0;
+  for (; i < p->n; i++) {
+    switch (p->t[i].kind) {
+      case T_LT: depth++; break;
+      case T_GT:
+        depth--;
+        if (depth == 0) return i + 1 < p->n && p->t[i + 1].kind == T_LPAREN;
+        break;
+      case T_IDENT: case T_COMMA: case T_FN: case T_LPAREN: case T_RPAREN: case T_ARROW: break;
+      default: return false;
+    }
+  }
+  return false;
+}
+
 static Expr *parse_primary(P *p) {
   Token *t = cur(p);
   switch (t->kind) {
     case T_INT: { advance(p); Expr *e = new_expr(p, E_INT, t->line); e->text = t->text; return e; }
     case T_FLOAT: { advance(p); Expr *e = new_expr(p, E_FLOAT, t->line); e->text = t->text; return e; }
-    case T_STRING: { advance(p); Expr *e = new_expr(p, E_STRING, t->line); e->text = t->text; return e; }
+    case T_STRING: {
+      advance(p);
+      Expr *e = new_expr(p, E_STRING, t->line);
+      e->text = t->text;
+      parse_string_parts(p, e, t->text, t->line);
+      return e;
+    }
     case T_TRUE: case T_FALSE: {
       advance(p);
       Expr *e = new_expr(p, E_BOOL, t->line);
@@ -258,11 +318,11 @@ static Expr *parse_primary(P *p) {
       advance(p);
       if (is_upper(t->text)) {
         if (at(p, T_LBRACE) && p->no_struct == 0) return parse_struct_lit(p, t->text, t->line);
-        if (at(p, T_LT)) {
+        if (at(p, T_LT) && looks_like_type_args(p)) {
           // generic constructor: List<Int>() / Map<K, V>()
           Expr *e = new_expr(p, E_TYPECTOR, t->line);
           Type *ty = NEW(p->a, Type);
-          ty->kind = TY_NAMED;
+          ty->kind = TYPE_NAMED;
           ty->line = t->line;
           ty->name = t->text;
           advance(p);

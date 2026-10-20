@@ -6,6 +6,7 @@ Every error is one line: `<ID> <file>:<line> <message>; <fix hint>`. When a decl
 
 - **E-SYN-01** unexpected token. A character or word the grammar does not allow here. Fix: compare the line with the example in the named section; remove semicolons, `return` outside a function, or trailing operators.
 - **E-SYN-02** unclosed block or literal. A `{`, `(`, `[` or `"` has no partner. Fix: close it on the line the hint names.
+- **E-SYN-03** `break` or `continue` outside a loop. Fix: remove it, or move it inside the `for` / `while` it belongs to.
 
 ## E-NAME: names and modules
 

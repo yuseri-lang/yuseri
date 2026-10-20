@@ -1,0 +1,10 @@
+E-TYPE-03 tests/errors/inventory.yu:6 missing return type on fn total_qty; write `name: Type` for every parameter and `-> Type` after the list
+E-RES-02 tests/errors/inventory.yu:22 `?` in fn qty_of, which returns Int, not Result<_, InvError>; change the return type to `Result<T, E>` so callers use `?` too; `match` with a default only when that default is correct
+E-BIND-01 tests/errors/inventory.yu:27 unused binding prefix; delete an unused `let` / `var`; name an unused parameter or pattern field `_`
+E-TYPE-02 tests/errors/inventory.yu:28 operator `+` is not defined on String; convert one side, or use interpolation / `join` for strings
+E-STR-01 tests/errors/inventory.yu:32 bare `}` in string literal; write `\{` or `\}`, or use `{expr}` for interpolation
+E-MATCH-01 tests/errors/inventory.yu:36 non-exhaustive match; missing: Err(_); add an arm for each listed case, or a final `_ =>` arm
+E-BIND-02 tests/errors/inventory.yu:43 push on let out; declare it with `var`
+E-RES-01 tests/errors/inventory.yu:48 unused Result from find(); add `?`, `match` it, or bind it (`let _ = expr` counts and means "ignored on purpose")
+E-BIND-03 tests/errors/inventory.yu:53 anonymous function captures var f; pass the value as a parameter, or copy it into a `let` first
+E-TYPE-04 tests/errors/inventory.yu:57 branches have different types: String and Int; make every arm the declared type; an `if` used as a statement must not produce a value

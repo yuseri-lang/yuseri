@@ -2,7 +2,7 @@
 
 **Yuseri** (ゆせり) is a statically typed programming language for backend services, designed so that an AI can write correct code from the bundled skill alone, without prior training on the language.
 
-- Status: early research. Stage 0 compiler in progress (M0: lexer, parser, formatter)
+- Status: early research. Stage 0 compiler in progress (M0 lexer, parser, formatter; M1 name resolution and type checking)
 - Skill (the language reference): [`skills/SKILL.md`](skills/SKILL.md), [`skills/core.md`](skills/core.md), [`skills/errors.md`](skills/errors.md)
 - Announced: 2026-10-20
 
@@ -15,7 +15,7 @@ make
 make test
 ```
 
-`build/yuseri fmt <file.yu>` prints a file in canonical layout; `build/yuseri check <file.yu>` reports `E-FMT-01` when a file is not formatted.
+`build/yuseri fmt <file.yu>` prints a file in canonical layout. `build/yuseri check <file.yu>` type-checks the file and prints every error as one line, `<ID> <file>:<line> <message>; <hint>`, sorted by line; each ID has an entry in `skills/errors.md`.
 
 ## Layout
 
@@ -33,6 +33,6 @@ tests/       golden tests
 
 **ゆせり（Yuseri）** は、バックエンドサービス向けの静的型付けプログラミング言語です。AI が事前学習なしに、同梱のスキル（言語リファレンス）だけを読んで正しいコードを書けることを目標に設計しています。
 
-- 状態: 研究の初期段階。Stage 0 コンパイラを実装中（M0: 字句解析、構文解析、フォーマッタ）
+- 状態: 研究の初期段階。Stage 0 コンパイラを実装中（M0 字句解析・構文解析・フォーマッタ、M1 名前解決・型検査）
 - スキル（言語リファレンス）: `skills/` 配下
 - 命名日: 2026-10-20

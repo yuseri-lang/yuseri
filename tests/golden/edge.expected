@@ -1,0 +1,34 @@
+// Edge cases found in review: parentheses that fmt must keep
+struct User { id: Int }
+
+const MAX: Int = 100
+
+fn cmp(a: Int, b: Int, c: Bool) -> Bool { (a < b) == c }
+
+fn cond(u: User) -> Int {
+  if u == (User { id: 1 }) { 1 } else { 2 }
+}
+
+fn in_match(u: User) -> Int {
+  match (User { ..u, id: 2 }).id {
+    2 => 1
+    _ => 0
+  }
+}
+
+fn in_loop() -> Int {
+  var n = 0
+  while n < (User { id: 3 }).id {
+    n = n + 1
+  }
+  for x in [User { id: 1 }] {
+    n = n + x.id
+  }
+  n
+}
+
+fn upper_const() -> Bool { MAX < 200 && MAX > MAX - 1 }
+
+fn ranges(n: Int) -> List<Int> {
+  (0..n).filter(fn(i: Int) -> Bool { i % 2 == 0 })
+}

@@ -67,7 +67,10 @@ void buf_printf(Buf *b, const char *fmt, ...);
 void buf_free(Buf *b);
 
 // Diagnostics: one line per error, "<ID> <file>:<line> <message>; <hint>".
+// With diag_buffer(true) errors are kept and printed sorted by line on diag_flush().
 void diag_error(const char *id, const char *file, int line, const char *fmt, ...);
+void diag_buffer(bool on);
+void diag_flush(void);
 int diag_count(void);
 const char *diag_hint(const char *id);
 

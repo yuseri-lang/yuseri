@@ -2,6 +2,7 @@
 // X(symbol, "ID", "hint")
 X(E_SYN_01, "E-SYN-01", "compare the line with the example in the named section; remove semicolons, `return` outside a function, or trailing operators")
 X(E_SYN_02, "E-SYN-02", "close it on the line the hint names")
+X(E_SYN_03, "E-SYN-03", "remove it, or move it inside the `for` / `while` it belongs to")
 X(E_NAME_01, "E-NAME-01", "define it, `import` its module, or check the spelling")
 X(E_NAME_02, "E-NAME-02", "rename one")
 X(E_NAME_03, "E-NAME-03", "add `pub` in its module")

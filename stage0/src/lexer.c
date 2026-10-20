@@ -116,8 +116,10 @@ static int scan_string(Lexer *L, int start_line) {
   return L->i;
 }
 
-LexResult lex(Arena *a, const char *file, Str src) {
-  Lexer Lx = {.a = a, .file = file, .src = src, .i = 0, .line = 1, .col = 1};
+LexResult lex(Arena *a, const char *file, Str src) { return lex_at(a, file, src, 1); }
+
+LexResult lex_at(Arena *a, const char *file, Str src, int base_line) {
+  Lexer Lx = {.a = a, .file = file, .src = src, .i = 0, .line = base_line, .col = 1};
   Lexer *L = &Lx;
   while (L->i < src.len) {
     char c = src.p[L->i];

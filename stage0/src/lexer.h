@@ -46,6 +46,7 @@ typedef struct {
 // Tokenizes `src`. Newlines that continue a statement are dropped. Errors are reported
 // through diag_error and lexing continues.
 LexResult lex(Arena *a, const char *file, Str src);
+LexResult lex_at(Arena *a, const char *file, Str src, int base_line);
 const char *tok_name(TokKind k);
 
 #endif

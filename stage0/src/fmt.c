@@ -10,6 +10,7 @@ typedef struct {
   int last_line;  // last source line whose content was printed
   bool inline_mode;
   bool inline_failed;
+  int no_struct;  // >0 while printing a condition: a struct literal must be parenthesized
 } F;
 
 static void fmt_expr(F *f, Expr *e, int min_prec);
@@ -67,7 +68,7 @@ static void trailing_comments(F *f, int end_line) {
 // ---- types -------------------------------------------------------------
 
 static void fmt_type(F *f, Type *t) {
-  if (t->kind == TY_FN) {
+  if (t->kind == TYPE_FN) {
     buf_puts(f->out, "fn(");
     for (int i = 0; i < t->args.len; i++) {
       if (i) buf_puts(f->out, ", ");
@@ -185,25 +186,34 @@ static void fmt_stmt(F *f, Stmt *s);
 
 static void render_block_inline(F *f, void *arg) {
   Block *b = arg;
-  if (b->stmts.len == 0) { buf_puts(f->out, "{ }"); return; }
+  int saved = f->no_struct;
+  f->no_struct = 0;
+  if (b->stmts.len == 0) { buf_puts(f->out, "{ }"); f->no_struct = saved; return; }
   buf_puts(f->out, "{ ");
   fmt_stmt(f, b->stmts.items[0]);
   buf_puts(f->out, " }");
+  f->no_struct = saved;
 }
 
 static void fmt_block_multi(F *f, Block *b);
 
 static void fmt_block(F *f, Block *b) {
+  int saved = f->no_struct;
+  f->no_struct = 0;
   if (block_inline_ok(f, b) && try_inline(f, render_block_inline, b)) {
     f->last_line = b->end_line;
+    f->no_struct = saved;
     return;
   }
   fmt_block_multi(f, b);
+  f->no_struct = saved;
 }
 
 // Always prints the block form, one statement per line.
 static void fmt_block_multi(F *f, Block *b) {
   if (f->inline_mode) { f->inline_failed = true; return; }
+  int saved_ns = f->no_struct;
+  f->no_struct = 0;
   if (b->stmts.len == 0 && !comments_in(f, b->line, b->end_line)) { buf_puts(f->out, "{ }"); f->last_line = b->end_line; return; }
   buf_puts(f->out, "{");
   nl(f);
@@ -224,6 +234,7 @@ static void fmt_block_multi(F *f, Block *b) {
   ind(f);
   buf_puts(f->out, "}");
   f->last_line = b->end_line;
+  f->no_struct = saved_ns;
 }
 
 typedef struct { Expr **items; Str *names; int len; } ExprList;
@@ -243,10 +254,12 @@ static void render_list(F *f, void *arg) {
 
 // Prints `open items close`, breaking one item per line when too wide.
 static void fmt_list(F *f, Expr **items, Str *names, int len, const char *open, const char *close) {
+  int saved_ns = f->no_struct;
+  f->no_struct = 0;
   buf_puts(f->out, open);
   ExprList l = {items, names, len};
-  if (len == 0 || try_inline(f, render_list, &l)) { buf_puts(f->out, close); return; }
-  if (f->inline_mode) { f->inline_failed = true; return; }
+  if (len == 0 || try_inline(f, render_list, &l)) { buf_puts(f->out, close); f->no_struct = saved_ns; return; }
+  if (f->inline_mode) { f->inline_failed = true; f->no_struct = saved_ns; return; }
   nl(f);
   f->indent++;
   for (int i = 0; i < len; i++) {
@@ -259,6 +272,7 @@ static void fmt_list(F *f, Expr **items, Str *names, int len, const char *open, 
   f->indent--;
   ind(f);
   buf_puts(f->out, close);
+  f->no_struct = saved_ns;
 }
 
 static void render_struct_fields(F *f, void *arg) {
@@ -329,7 +343,9 @@ static void fmt_if(F *f, Expr *e) {
   Expr *cur = e;
   for (;;) {
     buf_puts(f->out, "if ");
+    f->no_struct++;
     fmt_expr(f, cur->a, 0);
+    f->no_struct--;
     buf_push(f->out, ' ');
     fmt_block_multi(f, cur->block);
     if (cur->else_if) { buf_puts(f->out, " else "); cur = cur->else_if; continue; }
@@ -342,7 +358,9 @@ static void render_if_chain(F *f, void *arg) {
   Expr *cur = arg;
   for (;;) {
     buf_puts(f->out, "if ");
+    f->no_struct++;
     fmt_expr(f, cur->a, 0);
+    f->no_struct--;
     buf_push(f->out, ' ');
     if (!block_inline_ok(f, cur->block)) { f->inline_failed = true; return; }
     render_block_inline(f, cur->block);
@@ -359,7 +377,9 @@ static void render_if_chain(F *f, void *arg) {
 static void fmt_match(F *f, Expr *e) {
   if (f->inline_mode) { f->inline_failed = true; return; }
   buf_puts(f->out, "match ");
+  f->no_struct++;
   fmt_expr(f, e->a, 0);
+  f->no_struct--;
   buf_puts(f->out, " {");
   nl(f);
   f->indent++;
@@ -368,7 +388,7 @@ static void fmt_match(F *f, Expr *e) {
     comments_before(f, arm->line, i > 0);
     ind(f);
     fmt_pattern(f, arm->pat);
-    if (arm->guard) { buf_puts(f->out, " if "); fmt_expr(f, arm->guard, 0); }
+    if (arm->guard) { buf_puts(f->out, " if "); f->no_struct++; fmt_expr(f, arm->guard, 0); f->no_struct--; }
     buf_puts(f->out, " => ");
     Expr *body = arm->body;
     int end = arm->line;
@@ -414,21 +434,40 @@ static void fmt_expr(F *f, Expr *e, int min_prec) {
     case E_BOOL: buf_puts(f->out, e->bool_val ? "true" : "false"); break;
     case E_STRING: buf_push(f->out, '"'); buf_str(f->out, e->text); buf_push(f->out, '"'); break;
     case E_FIELD: fmt_expr(f, e->a, 8); buf_push(f->out, '.'); buf_str(f->out, e->text); break;
-    case E_INDEX: fmt_expr(f, e->a, 8); buf_push(f->out, '['); fmt_expr(f, e->b, 0); buf_push(f->out, ']'); break;
+    case E_INDEX: {
+      fmt_expr(f, e->a, 8);
+      buf_push(f->out, '[');
+      int saved = f->no_struct;
+      f->no_struct = 0;
+      fmt_expr(f, e->b, 0);
+      f->no_struct = saved;
+      buf_push(f->out, ']');
+      break;
+    }
     case E_TRY: fmt_expr(f, e->a, 8); buf_push(f->out, '?'); break;
     case E_CALL: fmt_expr(f, e->a, 8); fmt_list(f, e->args.items, e->arg_names.items, e->args.len, "(", ")"); break;
     case E_LIST: fmt_list(f, e->args.items, NULL, e->args.len, "[", "]"); break;
     case E_UNARY: buf_puts(f->out, e->op == T_MINUS ? "-" : "!"); fmt_expr(f, e->a, 7); break;
     case E_BINARY: {
       int p = bin_prec(e->op);
-      fmt_expr(f, e->a, p);
+      bool non_assoc = p == 4 || p == 1;  // comparison and `..` do not chain
+      fmt_expr(f, e->a, non_assoc ? p + 1 : p);
       if (e->op == T_DOTDOT) buf_puts(f->out, "..");
       else { buf_push(f->out, ' '); buf_puts(f->out, tok_name(e->op)); buf_push(f->out, ' '); }
       fmt_expr(f, e->b, p + 1);
       break;
     }
     case E_TYPECTOR: fmt_type(f, e->type); buf_puts(f->out, "()"); break;
-    case E_STRUCT: fmt_struct_lit(f, e); break;
+    case E_STRUCT:
+      if (f->no_struct) {
+        int saved = f->no_struct;
+        f->no_struct = 0;
+        buf_push(f->out, '(');
+        fmt_struct_lit(f, e);
+        buf_push(f->out, ')');
+        f->no_struct = saved;
+      } else fmt_struct_lit(f, e);
+      break;
     case E_IF: fmt_if(f, e); break;
     case E_MATCH: fmt_match(f, e); break;
     case E_FN: fmt_fn_expr(f, e); break;
@@ -461,14 +500,18 @@ static void fmt_stmt(F *f, Stmt *s) {
       buf_puts(f->out, "for ");
       buf_str(f->out, s->name);
       buf_puts(f->out, " in ");
+      f->no_struct++;
       fmt_expr(f, s->value, 0);
+      f->no_struct--;
       buf_push(f->out, ' ');
       fmt_block_multi(f, s->body);
       break;
     case S_WHILE:
       if (f->inline_mode) { f->inline_failed = true; return; }
       buf_puts(f->out, "while ");
+      f->no_struct++;
       fmt_expr(f, s->value, 0);
+      f->no_struct--;
       buf_push(f->out, ' ');
       fmt_block_multi(f, s->body);
       break;

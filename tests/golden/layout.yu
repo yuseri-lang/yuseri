@@ -1,0 +1,83 @@
+// Layout sample: comments, blank lines, wrapping, every declaration kind
+import std.json
+import std.string
+
+// A user record
+struct User {
+  id: Int,   // primary key
+  name: String,
+  tags: List<String>
+}
+
+enum Status { Active, Banned(reason: String) }
+
+enum AppError {
+  NotFound(id: Int),
+  Invalid(field: String, reason: String),
+}
+
+const MAX_USERS: Int = 100
+
+pub fn greet(name: String) -> String { "Hi {name}" }
+
+fn load(id: Int) -> Result<User, AppError> {
+  let u = find(id).ok_or(AppError.NotFound(id: id))?
+
+  // return it
+  Ok(u)
+}
+
+fn classify(n: Int) -> String {
+  let size = if n > 10 { "big" } else if n > 5 { "mid" } else { "small" }
+  if n < 0 {
+    return "negative"
+  }
+  size
+}
+
+fn describe(r: Result<User, AppError>) -> String {
+  match r {
+    Ok(u) if u.id > 0 => u.name
+    Ok(_) => "guest"
+    Err(AppError.NotFound(id: id)) => "no user {id}"
+    Err(e) => {
+      let text = "error: {e}"
+      text
+    }
+  }
+}
+
+fn totals(items: List<Int>) -> Int {
+  var total = 0
+  for i in 0..items.len() {
+    total = total + items[i]
+  }
+  while total > 1000 { total = total - 1 }
+  total
+}
+
+fn build() -> User {
+  let base = User { id: 1, name: "Ann", tags: [] }
+  User { ..base, name: "A very long name that is here to force the struct literal onto multiple lines" }
+}
+
+fn math(a: Int, b: Int) -> Int { (a + b) * -(a - b) % 3 }
+
+fn handlers() -> Map<String, fn(Int) -> Int> {
+  var m = Map<String, fn(Int) -> Int>()
+  m.set("double", fn(x: Int) -> Int { x * 2 })
+  m
+}
+
+impl User {
+  fn display(self) -> String { "{self.id}:{self.name}" }
+
+  pub fn rename(self, name: String) -> User { User { ..self, name: name } }
+}
+
+test "greet works" { assert_eq(greet("Bo"), "Hi Bo") }
+
+test "classify" {
+  assert_eq(classify(11), "big")
+  assert_eq(classify(-1), "negative")
+}

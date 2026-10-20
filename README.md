@@ -1,21 +1,38 @@
 # Yuseri
 
-**Yuseri** (ゆせり) is a programming language.
+**Yuseri** (ゆせり) is a statically typed programming language for backend services, designed so that an AI can write correct code from the bundled skill alone, without prior training on the language.
 
-This repository reserves the name for a personal research project.
-Details of the language will be published later.
-
-- Status: name reserved, pre-release
+- Status: early research. Stage 0 compiler in progress (M0: lexer, parser, formatter)
+- Skill (the language reference): [`skills/SKILL.md`](skills/SKILL.md), [`skills/core.md`](skills/core.md), [`skills/errors.md`](skills/errors.md)
 - Announced: 2026-10-20
+
+## Build
+
+Requires clang (or any C11 compiler) and make. No other dependencies.
+
+```
+make
+make test
+```
+
+`build/yuseri fmt <file.yu>` prints a file in canonical layout; `build/yuseri check <file.yu>` reports `E-FMT-01` when a file is not formatted.
+
+## Layout
+
+```
+skills/      language reference for AI (the source of truth)
+stage0/src/  Stage 0 compiler (C, throwaway; compiles Yuseri Core to C)
+stage0/rt/   runtime for generated C
+std/         standard library signatures
+tests/       golden tests
+```
 
 ---
 
 # ゆせり
 
-**ゆせり（Yuseri）** はプログラミング言語です。
+**ゆせり（Yuseri）** は、バックエンドサービス向けの静的型付けプログラミング言語です。AI が事前学習なしに、同梱のスキル（言語リファレンス）だけを読んで正しいコードを書けることを目標に設計しています。
 
-このリポジトリは、個人研究プロジェクトのために名称を確保するものです。
-言語の詳細は後日公開します。
-
-- 状態: 名称確保済み、未公開
+- 状態: 研究の初期段階。Stage 0 コンパイラを実装中（M0: 字句解析、構文解析、フォーマッタ）
+- スキル（言語リファレンス）: `skills/` 配下
 - 命名日: 2026-10-20

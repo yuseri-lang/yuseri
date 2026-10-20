@@ -98,6 +98,10 @@ yu_str yu_str_to_lower(yu_str s);
 yu_str yu_str_slice(yu_str s, int64_t start, int64_t end, const char *loc);
 yu_list yu_str_chars(yu_str s);
 yu_bytes yu_str_bytes(yu_str s);
+// Copies the bytes into the current arena. Strings are shared freely inside one arena; a value
+// that moves between arenas (into or out of a Store) is relocated with these.
+yu_str yu_str_relocate(yu_str s);
+yu_bytes yu_bytes_relocate(yu_bytes b);
 yu_str yu_str_join(yu_str sep, yu_list parts);
 yu_str yu_str_repeat(yu_str s, int64_t n, const char *loc);
 bool yu_int_parse(yu_str s, int64_t *out);

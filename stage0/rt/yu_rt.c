@@ -320,6 +320,8 @@ yu_list yu_str_chars(yu_str s) {
 }
 
 yu_bytes yu_str_bytes(yu_str s) { yu_str d = str_dup(s.p, s.len); return (yu_bytes){(uint8_t *)d.p, d.len}; }
+yu_str yu_str_relocate(yu_str s) { return str_dup(s.p, s.len); }
+yu_bytes yu_bytes_relocate(yu_bytes b) { yu_str d = str_dup(b.p, b.len); return (yu_bytes){(uint8_t *)d.p, d.len}; }
 
 yu_str yu_str_join(yu_str sep, yu_list parts) {
   yu_sb b = {0};

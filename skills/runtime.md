@@ -39,9 +39,9 @@ Only `main` receives `System`. Every other function takes the capabilities it ne
 | `Net` | `http.serve(net, port, handler)`, `http.serve_with(net, opts, handler)` | call the handler with `http.request(...)`; no `Net` needed |
 | `Clock` | `clock.now() -> Int` (Unix milliseconds) | `Clock.fixed(1700000000000) -> Clock` |
 | `Env` | `env.get("PORT") -> Option<String>` | `Env.of(m: Map<String, String>) -> Env` |
-| `Log` | `log.info(msg) -> Unit`, `log.error(msg) -> Unit`. Each line is `<request id> <level> <msg>`, e.g. `req-7 info GET /x -> 200`; in a test the request id is the test name | `Log.capture() -> Log`, then `log.lines() -> List<String>` |
+| `Log` | `log.info(msg) -> Unit`, `log.error(msg) -> Unit`. Each line is `<request id> <level> <msg>`, e.g. `req-7 info GET /x -> 200`; in a test the request id is the test name, spaces included: `routes work info GET /x -> 200` | `Log.capture() -> Log`, then `log.lines() -> List<String>` |
 | `Fs` | `fs.read(path) -> Result<String, FsError>`, `fs.write(path, text) -> Result<Unit, FsError>` (text files; `enum FsError { NotFound(path: String), Io(path: String, message: String) }`) | `Fs.memory() -> Fs`, an empty in-memory disk |
-| `Random` | `random.int(max) -> Int`, uniform in `0..max` (`R-RAND-01` if `max <= 0`) | `Random.seeded(42) -> Random`, the same sequence every run |
+| `Random` | `random.int(max) -> Int`, uniform, `0 <= n < max` (`R-RAND-01` if `max <= 0`); each call advances the handle | `Random.seeded(42) -> Random`: the same sequence every run; two handles with one seed give the same values |
 | `Tasks` | `tasks.spawn(f: fn() -> Unit) -> Unit` (section 4) | `Tasks.inline() -> Tasks` runs `f` immediately |
 
 A program that touches none of these has `fn main() -> Unit` (core.md 1) or no `main` at all.

@@ -45,7 +45,14 @@ elapsed=$(( $(date +%s) - start ))
 wait $slow_pids
 if [ "$status" = 200 ] && [ "$elapsed" -le 2 ]; then echo "ok      a fast request is answered while slow ones run (${elapsed}s)"; else echo "FAIL    fast request: status $status after ${elapsed}s"; fail=1; fi
 
-# 5. spawned tasks run after the response: /later answers the old count, /count shows the new one
+# 5. strings stored by one request must survive after its arena is released and reused
+curl -s -o /dev/null -X POST http://127.0.0.1:8080/names/ann
+curl -s -o /dev/null -X POST http://127.0.0.1:8080/names/bob
+seq 1 50 | xargs -P 8 -I{} curl -s -o /dev/null -X POST -d 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' http://127.0.0.1:8080/hit
+got=$(curl -s http://127.0.0.1:8080/names)
+if [ "$got" = "ann,bob" ]; then echo "ok      strings in a Store survive across requests"; else echo "FAIL    stored strings: got '$got', want 'ann,bob'"; fail=1; fi
+
+# 6. spawned tasks run after the response: /later answers the old count, /count shows the new one
 before=$(curl -s http://127.0.0.1:8080/count)
 answered=$(curl -s -X POST http://127.0.0.1:8080/later)
 after=$(curl -s http://127.0.0.1:8080/count)

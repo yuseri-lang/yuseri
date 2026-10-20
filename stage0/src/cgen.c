@@ -14,7 +14,7 @@ typedef struct {
   Buf protos;   // prototypes of helpers, user functions, anonymous functions
   Buf helpers;  // eq / fmt / copy helper bodies
   Buf code;     // function bodies
-  StrVec emitted_types, eq_done, fmt_done, copy_done, thunk_done;
+  StrVec emitted_types, eq_done, fmt_done, copy_done, reloc_done, thunk_done;
   int tmp;      // temporary counter
   int indent;
   Buf *out;     // current body buffer
@@ -512,6 +512,92 @@ static const char *copy_fn(G *g, Ty *t) {
           if (needs_copy(g, ft)) buf_printf(&b, "  if (v.tag == %d) v.u.v_%s.f_%s = %s(v.u.v_%s.f_%s);\n", i, cs(g, v->name), cs(g, v->fields.items[k].name), copy_fn(g, ft), cs(g, v->name), cs(g, v->fields.items[k].name));
         }
       }
+      buf_puts(&b, "  return v;\n");
+      break;
+    default: buf_puts(&b, "  return v;\n"); break;
+  }
+  buf_puts(&b, "}\n");
+  buf_puts(&g->helpers, b.p);
+  buf_free(&b);
+  return n;
+}
+
+// Relocation: a deep copy that also duplicates strings and bytes, for values that cross an
+// arena boundary (into a Store's arena on commit, out of it on get / update). Inside one arena
+// strings are immutable and shared, so copy_fn never duplicates them; here it is required,
+// because the arena the strings came from will be freed.
+static bool needs_reloc_raw(Ty *t) {
+  switch (t->kind) {
+    case TY_STRING: case TY_BYTES: case TY_LIST: case TY_MAP: case TY_ENUM: return true;  // enum: its trace
+    case TY_OPTION: return needs_reloc_raw(t->a);
+    case TY_RESULT: case TY_ENTRY: return needs_reloc_raw(t->a) || needs_reloc_raw(t->b);
+    case TY_STRUCT:
+      if (!t->decl) return false;
+      for (int i = 0; i < t->decl->params.len; i++) if (needs_reloc_raw(t->decl->params.items[i].ty)) return true;
+      for (int i = 0; i < t->args.len; i++) if (needs_reloc_raw(t->args.items[i])) return true;
+      return false;
+    default: return false;
+  }
+}
+static bool needs_reloc(G *g, Ty *t) { return needs_reloc_raw(sub(g, t)); }
+
+static const char *reloc_fn(G *g, Ty *t) {
+  t = sub(g, t);
+  const char *n = sfmt(g, "yu_reloc_%s", mangle(g, t));
+  if (seen(&g->reloc_done, n)) return n;
+  mark(g, &g->reloc_done, n);
+  const char *ct = ctype(g, t);
+  buf_printf(&g->protos, "static %s %s(%s v);\n", ct, n, ct);
+  Buf b = {0};
+  buf_printf(&b, "static %s %s(%s v) {\n", ct, n, ct);
+  switch (t->kind) {
+    case TY_STRING: buf_puts(&b, "  return yu_str_relocate(v);\n"); break;
+    case TY_BYTES: buf_puts(&b, "  return yu_bytes_relocate(v);\n"); break;
+    case TY_LIST: {
+      const char *et = ctype(g, t->a);
+      buf_printf(&b, "  yu_list r = yu_list_copy(v, sizeof(%s));\n", et);
+      if (needs_reloc(g, t->a)) buf_printf(&b, "  for (int64_t i = 0; i < r.len; i++) ((%s *)r.p)[i] = %s(((%s *)r.p)[i]);\n", et, reloc_fn(g, t->a), et);
+      buf_puts(&b, "  return r;\n");
+      break;
+    }
+    case TY_MAP: {
+      const char *vt = ctype(g, t->b);
+      buf_printf(&b, "  yu_map r = yu_map_copy(v, sizeof(%s));\n", vt);
+      if (t->a->kind == TY_STRING) buf_puts(&b, "  for (int64_t i = 0; i < r.keys.len; i++) ((yu_str *)r.keys.p)[i] = yu_str_relocate(((yu_str *)r.keys.p)[i]);\n");
+      if (needs_reloc(g, t->b)) buf_printf(&b, "  for (int64_t i = 0; i < r.vals.len; i++) ((%s *)r.vals.p)[i] = %s(((%s *)r.vals.p)[i]);\n", vt, reloc_fn(g, t->b), vt);
+      buf_puts(&b, "  return r;\n");
+      break;
+    }
+    case TY_OPTION: buf_printf(&b, "  if (v.some) v.val = %s(v.val);\n  return v;\n", reloc_fn(g, t->a)); break;
+    case TY_RESULT:
+      if (needs_reloc(g, t->a)) buf_printf(&b, "  if (v.ok) v.val = %s(v.val);\n", reloc_fn(g, t->a));
+      if (needs_reloc(g, t->b)) buf_printf(&b, "  if (!v.ok) v.err = %s(v.err);\n", reloc_fn(g, t->b));
+      buf_puts(&b, "  return v;\n");
+      break;
+    case TY_ENTRY:
+      if (needs_reloc(g, t->a)) buf_printf(&b, "  v.key = %s(v.key);\n", reloc_fn(g, t->a));
+      if (needs_reloc(g, t->b)) buf_printf(&b, "  v.value = %s(v.value);\n", reloc_fn(g, t->b));
+      buf_puts(&b, "  return v;\n");
+      break;
+    case TY_STRUCT:
+      for (int i = 0; i < t->decl->params.len; i++) {
+        Ty *ft = field_ty(g, t, &t->decl->params.items[i]);
+        if (needs_reloc(g, ft)) buf_printf(&b, "  v.f_%s = %s(v.f_%s);\n", cs(g, t->decl->params.items[i].name), reloc_fn(g, ft), cs(g, t->decl->params.items[i].name));
+      }
+      buf_puts(&b, "  return v;\n");
+      break;
+    case TY_ENUM:
+      if (t->decl) {
+        for (int i = 0; i < t->decl->variants.len; i++) {
+          Variant *v = &t->decl->variants.items[i];
+          for (int k = 0; k < v->fields.len; k++) {
+            Ty *ft = ty_subst(g->a, v->fields.items[k].ty, &t->decl->generics, &t->args);
+            if (needs_reloc(g, ft)) buf_printf(&b, "  if (v.tag == %d) v.u.v_%s.f_%s = %s(v.u.v_%s.f_%s);\n", i, cs(g, v->name), cs(g, v->fields.items[k].name), reloc_fn(g, ft), cs(g, v->name), cs(g, v->fields.items[k].name));
+          }
+        }
+      }
+      buf_puts(&b, "  v.trace_ = yu_list_copy(v.trace_, sizeof(yu_str));\n");
+      buf_puts(&b, "  for (int64_t i = 0; i < v.trace_.len; i++) ((yu_str *)v.trace_.p)[i] = yu_str_relocate(((yu_str *)v.trace_.p)[i]);\n");
       buf_puts(&b, "  return v;\n");
       break;
     default: buf_puts(&b, "  return v;\n"); break;
@@ -1257,7 +1343,7 @@ static const char *gen_builtin(G *g, Expr *e) {
         // arena escapes, and no update can free that arena half-way through the copy
         const char *r = newtmp(g);
         emit(g, "yu_store_lock(%s, %s);", st, loc(g, e->line));
-        if (needs_copy(g, T)) emit(g, "%s %s = %s(*(%s *)%s->value);", tt, r, copy_fn(g, T), tt, st);
+        if (needs_reloc(g, T)) emit(g, "%s %s = %s(*(%s *)%s->value);", tt, r, reloc_fn(g, T), tt, st);
         else emit(g, "%s %s = *(%s *)%s->value;", tt, r, tt, st);
         emit(g, "yu_store_unlock(%s);", st);
         return r;
@@ -1288,12 +1374,19 @@ static const char *gen_builtin(G *g, Expr *e) {
             g->indent++;
           }
         }
+        // the new value is relocated into a fresh arena (commit frees the old one, which the
+        // strings in `nv` may point into); the value handed back is relocated again into the
+        // caller's arena, since the store's arena can be freed by the next update
         const char *prev = newtmp(g), *cp = newtmp(g);
         emit(g, "yu_arena *%s = yu_store_begin(%s);", prev, st);
-        if (needs_copy(g, T)) emit(g, "%s %s = %s(%s);", tt, cp, copy_fn(g, T), nv);
+        if (needs_reloc(g, T)) emit(g, "%s %s = %s(%s);", tt, cp, reloc_fn(g, T), nv);
         else emit(g, "%s %s = %s;", tt, cp, nv);
         emit(g, "yu_store_commit(%s, &%s, %s);", st, cp, prev);
-        if (IS("try_update")) { g->indent--; emit(g, "}"); }
+        if (IS("try_update")) {
+          if (needs_reloc(g, T)) emit(g, "%s.val = %s(%s);", res, reloc_fn(g, T), cp);
+          g->indent--;
+          emit(g, "}");
+        } else if (IS("update") && needs_reloc(g, T)) emit(g, "%s = %s(%s);", nv, reloc_fn(g, T), cp);
         emit(g, "yu_store_unlock(%s);", st);
         if (IS("try_update")) return res;
         if (IS("update")) return nv;
@@ -1597,7 +1690,7 @@ static const char *gen_call(G *g, Expr *e) {
         const char *st = newtmp(g), *prev = newtmp(g), *cp = newtmp(g);
         emit(g, "yu_store *%s = yu_store_new(sizeof(%s));", st, ctype(g, T));
         emit(g, "yu_arena *%s = yu_store_begin(%s);", prev, st);
-        if (needs_copy(g, T)) emit(g, "%s %s = %s(%s);", ctype(g, T), cp, copy_fn(g, T), v);
+        if (needs_reloc(g, T)) emit(g, "%s %s = %s(%s);", ctype(g, T), cp, reloc_fn(g, T), v);
         else emit(g, "%s %s = %s;", ctype(g, T), cp, v);
         emit(g, "yu_store_commit(%s, &%s, %s);", st, cp, prev);
         return st;

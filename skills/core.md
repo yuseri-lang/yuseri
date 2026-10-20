@@ -122,7 +122,7 @@ m.set("a", 1)
 let v = m.get("a")        // Option<Int>
 let has = m.has("a")
 ```
-Other methods: `len()`, `remove(k)`.
+Other methods: `len()`, `remove(k) -> Unit`.
 
 ## 17. Methods
 `impl Type { ... }` attaches functions. `self` is the receiver and is read-only; return a new value instead of mutating.

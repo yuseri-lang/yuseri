@@ -108,7 +108,9 @@ static void fmt_params(F *f, ParamVec *ps) {
 // the text when the whole thing fits on the current line without multi-line constructs.
 typedef void (*RenderFn)(F *f, void *arg);
 
-static bool try_inline(F *f, RenderFn render, void *arg) {
+// `extra` is the width of what follows on the same line (a closing ` }` or `]`) so the
+// 80-column rule covers the whole line, not just the rendered part.
+static bool try_inline(F *f, RenderFn render, void *arg, int extra) {
   if (f->inline_mode) {  // already inline: just render, failure propagates
     render(f, arg);
     return !f->inline_failed;
@@ -119,7 +121,7 @@ static bool try_inline(F *f, RenderFn render, void *arg) {
   g.inline_mode = true;
   g.inline_failed = false;
   render(&g, arg);
-  bool ok = !g.inline_failed && cur_col(f) + tmp.len <= WIDTH && memchr(tmp.p, '\n', (size_t)tmp.len) == NULL;
+  bool ok = !g.inline_failed && cur_col(f) + tmp.len + extra <= WIDTH && memchr(tmp.p, '\n', (size_t)tmp.len) == NULL;
   if (ok) buf_write(f->out, tmp.p, tmp.len);
   buf_free(&tmp);
   return ok;
@@ -200,7 +202,7 @@ static void fmt_block_multi(F *f, Block *b);
 static void fmt_block(F *f, Block *b) {
   int saved = f->no_struct;
   f->no_struct = 0;
-  if (block_inline_ok(f, b) && try_inline(f, render_block_inline, b)) {
+  if (block_inline_ok(f, b) && try_inline(f, render_block_inline, b, 0)) {
     f->last_line = b->end_line;
     f->no_struct = saved;
     return;
@@ -258,7 +260,7 @@ static void fmt_list(F *f, Expr **items, Str *names, int len, const char *open, 
   f->no_struct = 0;
   buf_puts(f->out, open);
   ExprList l = {items, names, len};
-  if (len == 0 || try_inline(f, render_list, &l)) { buf_puts(f->out, close); f->no_struct = saved_ns; return; }
+  if (len == 0 || try_inline(f, render_list, &l, (int)strlen(close))) { buf_puts(f->out, close); f->no_struct = saved_ns; return; }
   if (f->inline_mode) { f->inline_failed = true; f->no_struct = saved_ns; return; }
   nl(f);
   f->indent++;
@@ -292,7 +294,7 @@ static void fmt_struct_lit(F *f, Expr *e) {
   buf_str(f->out, e->type_name);
   buf_puts(f->out, " { ");
   if (!e->base && e->fields.len == 0) { buf_puts(f->out, "}"); return; }
-  if (try_inline(f, render_struct_fields, e)) { buf_puts(f->out, " }"); return; }
+  if (try_inline(f, render_struct_fields, e, 2)) { buf_puts(f->out, " }"); return; }
   if (f->inline_mode) { f->inline_failed = true; return; }
   f->out->len--;  // drop the space after "{"
   nl(f);
@@ -337,7 +339,7 @@ static void fmt_pattern(F *f, Pattern *p) {
 static void render_if_chain(F *f, void *arg);
 
 static void fmt_if(F *f, Expr *e) {
-  if (!f->inline_mode && try_inline(f, render_if_chain, e)) return;
+  if (!f->inline_mode && try_inline(f, render_if_chain, e, 0)) return;
   if (f->inline_mode) { f->inline_failed = true; return; }
   // multi-line chain: every block is printed in block form so the chain stays uniform
   Expr *cur = e;
@@ -539,13 +541,43 @@ static void fmt_generics(F *f, StrVec *g) {
   buf_push(f->out, '>');
 }
 
+// The signature after the name, with the ` {` that follows it, so the width check covers the
+// whole first line of the declaration.
+static void render_signature(F *f, void *arg) {
+  Decl *d = arg;
+  fmt_params(f, &d->params);
+  if (d->ret) { buf_puts(f->out, " -> "); fmt_type(f, d->ret); }
+  buf_puts(f->out, " {");
+}
+
 static void fmt_fn_decl(F *f, Decl *d) {
   if (d->pub) buf_puts(f->out, "pub ");
   buf_puts(f->out, "fn ");
   buf_str(f->out, d->name);
   fmt_generics(f, &d->generics);
-  fmt_params(f, &d->params);
-  if (d->ret) { buf_puts(f->out, " -> "); fmt_type(f, d->ret); }
+  if (d->params.len == 0 || try_inline(f, render_signature, d, 0)) {
+    if (d->params.len == 0) {
+      fmt_params(f, &d->params);
+      if (d->ret) { buf_puts(f->out, " -> "); fmt_type(f, d->ret); }
+    } else f->out->len -= 2;  // drop the measured ` {`; fmt_block prints its own
+  } else {
+    // too wide: one parameter per line with a trailing comma, like a call that does not fit
+    buf_push(f->out, '(');
+    nl(f);
+    f->indent++;
+    for (int i = 0; i < d->params.len; i++) {
+      Param *p = &d->params.items[i];
+      ind(f);
+      buf_str(f->out, p->name);
+      if (p->type) { buf_puts(f->out, ": "); fmt_type(f, p->type); }
+      buf_push(f->out, ',');
+      nl(f);
+    }
+    f->indent--;
+    ind(f);
+    buf_push(f->out, ')');
+    if (d->ret) { buf_puts(f->out, " -> "); fmt_type(f, d->ret); }
+  }
   buf_push(f->out, ' ');
   fmt_block(f, d->body);
 }
@@ -570,7 +602,7 @@ static void fmt_struct_decl(F *f, Decl *d) {
   buf_puts(f->out, " { ");
   FieldArg fa = {&d->params};
   if (d->params.len == 0) { buf_puts(f->out, "}"); return; }
-  if (!comments_in(f, d->line, d->end_line) && try_inline(f, render_fields, &fa)) { buf_puts(f->out, " }"); return; }
+  if (!comments_in(f, d->line, d->end_line) && try_inline(f, render_fields, &fa, 2)) { buf_puts(f->out, " }"); return; }
   f->out->len--;
   nl(f);
   f->indent++;
@@ -613,7 +645,7 @@ static void fmt_enum_decl(F *f, Decl *d) {
   fmt_generics(f, &d->generics);
   buf_puts(f->out, " { ");
   if (d->variants.len == 0) { buf_puts(f->out, "}"); return; }
-  if (!comments_in(f, d->line, d->end_line) && try_inline(f, render_variants, d)) { buf_puts(f->out, " }"); return; }
+  if (!comments_in(f, d->line, d->end_line) && try_inline(f, render_variants, d, 2)) { buf_puts(f->out, " }"); return; }
   f->out->len--;
   nl(f);
   f->indent++;

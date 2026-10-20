@@ -1,0 +1,3 @@
+E-TYPE-01 tests/errors/review-m1.yu:7 fn generic_box returns Int, body has type String; convert explicitly (`Int.parse`, `String.from`, ...) or change the declared type
+E-TYPE-01 tests/errors/review-m1.yu:12 fn never_branch returns Int, body has type String; convert explicitly (`Int.parse`, `String.from`, ...) or change the declared type
+E-SYN-03 tests/errors/review-m1.yu:15 `break` outside a loop; remove it, or move it inside the `for` / `while` it belongs to

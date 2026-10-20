@@ -35,6 +35,7 @@ typedef struct {
   Scope *scope;
   FnCtx *fn;
   StrVec *generics;  // generic parameter names of the current function
+  int loop_depth;    // > 0 inside a for / while body of the current function
 } C;
 
 #define ERR(c, id, line, ...) diag_error(id, (c)->file, line, __VA_ARGS__)
@@ -574,8 +575,8 @@ static Ty *infer_match(C *c, Expr *e, Ty *expected) {
     check_pattern(c, arm->pat, subject);
     if (arm->guard) check_expr(c, arm->guard, ty_prim(TY_BOOL));
     else VEC_PUSH(c->a, &unguarded, arm->pat);
-    Ty *bt = infer(c, arm->body, result);
-    if (!result) result = bt;
+    Ty *bt = infer(c, arm->body, result && result->kind != TY_NEVER ? result : NULL);
+    if (!result || result->kind == TY_NEVER) result = bt;
     else if (!ty_eq(bt, result)) ERR(c, "E-TYPE-04", arm->body->line, "branches have different types: %s and %s", tstr(c, result), tstr(c, bt));
     if (!arm->guard && pat_irrefutable(arm->pat)) irrefutable_seen = true;
     pop_scope(c);
@@ -600,35 +601,72 @@ static Ty *infer_if(C *c, Expr *e, Ty *expected) {
   push_scope(c);
   Ty *t1 = check_block(c, e->block, expected);
   pop_scope(c);
-  Ty *want = expected ? expected : t1;
+  // a branch that only panics or returns (Never) takes the type of the other branch
+  Ty *want = expected ? expected : (t1->kind == TY_NEVER ? NULL : t1);
   Ty *t2;
   if (e->else_if) t2 = infer_if(c, e->else_if, want);
   else { push_scope(c); t2 = check_block(c, e->else_block, want); pop_scope(c); }
-  if (!ty_eq(t1, t2) || (expected && !ty_eq(t1, expected)))
+  if (!ty_eq(t1, t2) || (expected && (!ty_eq(t1, expected) || !ty_eq(t2, expected))))
     ERR(c, "E-TYPE-04", e->line, "branches have different types: %s and %s", tstr(c, expected ? expected : t1), tstr(c, ty_eq(t1, want) ? t2 : t1));
-  return expected ? expected : t1;
+  if (expected) return expected;
+  return t1->kind == TY_NEVER ? t2 : t1;
+}
+
+// Field type as declared, with the struct's generic parameters left as TY_PARAM.
+static Ty *raw_field_type(C *c, Decl *d, Str field) {
+  for (int i = 0; i < d->params.len; i++)
+    if (str_eq(d->params.items[i].name, field)) {
+      StrVec *saved = c->generics;
+      c->generics = &d->generics;
+      Ty *ft = resolve_type(c, d->params.items[i].type);
+      c->generics = saved;
+      return ft;
+    }
+  return NULL;
 }
 
 static Ty *infer_struct_lit(C *c, Expr *e) {
   Decl *d = find_decl(&c->structs, e->type_name);
   if (!d) { ERR(c, "E-NAME-01", e->line, "unknown struct %s", cstr(c, e->type_name)); return ty_prim(TY_ERR); }
   Ty *st = ty_named(c->a, TY_STRUCT, e->type_name, d);
-  if (d->generics.len) {
-    // generic struct: take the arguments from the base value, if any; otherwise leave unbound
-    if (e->base) { Ty *bt = infer(c, e->base, NULL); if (bt->kind == TY_STRUCT && bt->decl == d) st = bt; }
-    else {
-      for (int i = 0; i < d->generics.len; i++) { Ty *p = ty_prim(TY_ERR); VEC_PUSH(c->a, &st->args, p); }
-    }
-  } else if (e->base) {
-    check_expr(c, e->base, st);
-  }
   bool *seen = arena_alloc(c->a, sizeof(bool) * (size_t)(d->params.len + 1));
-  for (int i = 0; i < e->fields.len; i++) {
-    FieldInit *f = &e->fields.items[i];
-    Ty *ft = struct_field(c, st, f->name);
-    if (!ft) { ERR(c, "E-TYPE-06", e->line, "%s has no field %s", cstr(c, e->type_name), cstr(c, f->name)); infer(c, f->value, NULL); continue; }
-    for (int j = 0; j < d->params.len; j++) if (str_eq(d->params.items[j].name, f->name)) seen[j] = true;
-    check_expr(c, f->value, ft);
+  bool fields_checked = false;
+  if (e->base) {
+    if (d->generics.len) {
+      Ty *bt = infer(c, e->base, NULL);
+      if (bt->kind == TY_STRUCT && bt->decl == d) st = bt;
+      else if (!ty_is_err(bt)) ERR(c, "E-TYPE-01", e->line, "expected %s, got %s", cstr(c, e->type_name), tstr(c, bt));
+    } else {
+      check_expr(c, e->base, st);
+    }
+  } else if (d->generics.len) {
+    // infer the type arguments from the field values, in source order
+    TyVec binds = {0};
+    for (int i = 0; i < e->fields.len; i++) {
+      FieldInit *f = &e->fields.items[i];
+      Ty *raw = raw_field_type(c, d, f->name);
+      if (!raw) { ERR(c, "E-TYPE-06", e->line, "%s has no field %s", cstr(c, e->type_name), cstr(c, f->name)); infer(c, f->value, NULL); continue; }
+      for (int j = 0; j < d->params.len; j++) if (str_eq(d->params.items[j].name, f->name)) seen[j] = true;
+      Ty *known = ty_subst(c->a, raw, &d->generics, &binds);
+      Ty *vt = infer(c, f->value, ty_has_param(known) ? NULL : known);
+      if (!ty_unify(c->a, raw, vt, &d->generics, &binds))
+        ERR(c, "E-TYPE-01", f->value->line, "expected %s, got %s", tstr(c, known), tstr(c, vt));
+    }
+    for (int i = 0; i < d->generics.len; i++) {
+      Ty *b = i < binds.len ? binds.items[i] : NULL;
+      if (!b) { ERR(c, "E-TYPE-05", e->line, "cannot infer %s for %s", cstr(c, d->generics.items[i]), cstr(c, e->type_name)); b = ty_prim(TY_ERR); }
+      VEC_PUSH(c->a, &st->args, b);
+    }
+    fields_checked = true;
+  }
+  if (!fields_checked) {
+    for (int i = 0; i < e->fields.len; i++) {
+      FieldInit *f = &e->fields.items[i];
+      Ty *ft = struct_field(c, st, f->name);
+      if (!ft) { ERR(c, "E-TYPE-06", e->line, "%s has no field %s", cstr(c, e->type_name), cstr(c, f->name)); infer(c, f->value, NULL); continue; }
+      for (int j = 0; j < d->params.len; j++) if (str_eq(d->params.items[j].name, f->name)) seen[j] = true;
+      check_expr(c, f->value, ft);
+    }
   }
   if (!e->base) {
     for (int j = 0; j < d->params.len; j++)
@@ -644,11 +682,14 @@ static Ty *infer_fn_expr(C *c, Expr *e) {
   for (int i = 0; i < e->params.len; i++) { Ty *t = resolve_type(c, e->params.items[i].type); VEC_PUSH(c->a, &ps, t); }
   FnCtx fx = {.ret = ret, .name = STR_LIT("anonymous fn"), .depth = c->fn ? c->fn->depth + 1 : 1, .outer = c->fn};
   c->fn = &fx;
+  int saved_loops = c->loop_depth;
+  c->loop_depth = 0;
   push_scope(c);
   for (int i = 0; i < e->params.len; i++) define(c, e->params.items[i].name, ps.items[i], false, e->params.items[i].line, true);
   Ty *bt = check_block(c, e->block, ret->kind == TY_UNIT ? NULL : ret);
   if (ret->kind != TY_UNIT && !ty_eq(bt, ret)) ERR(c, "E-TYPE-01", e->line, "anonymous fn returns %s, body has type %s", tstr(c, ret), tstr(c, bt));
   pop_scope(c);
+  c->loop_depth = saved_loops;
   c->fn = fx.outer;
   return ty_fn(c->a, ps, ret);
 }
@@ -914,7 +955,9 @@ static void check_stmt(C *c, Stmt *s) {
       else if (ret->kind != TY_UNIT && !ty_is_err(ret)) ERR(c, "E-TYPE-01", s->line, "return needs a value of type %s", tstr(c, ret));
       break;
     }
-    case S_BREAK: case S_CONTINUE: break;
+    case S_BREAK: case S_CONTINUE:
+      if (c->loop_depth == 0) ERR(c, "E-SYN-03", s->line, "`%s` outside a loop", s->kind == S_BREAK ? "break" : "continue");
+      break;
     case S_FOR: {
       Ty *it = infer(c, s->value, NULL);
       Ty *elem = ty_prim(TY_ERR);
@@ -925,14 +968,18 @@ static void check_stmt(C *c, Stmt *s) {
       }
       push_scope(c);
       define(c, s->name, elem, false, s->line, false);
+      c->loop_depth++;
       check_block(c, s->body, NULL);
+      c->loop_depth--;
       pop_scope(c);
       break;
     }
     case S_WHILE: {
       check_expr(c, s->value, ty_prim(TY_BOOL));
       push_scope(c);
+      c->loop_depth++;
       check_block(c, s->body, NULL);
+      c->loop_depth--;
       pop_scope(c);
       break;
     }

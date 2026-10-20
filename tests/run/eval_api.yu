@@ -1,0 +1,165 @@
+import std.http
+import std.json
+
+const USERS_PREFIX: String = "/users/"
+
+struct NewUser { name: String, age: Int, email: String }
+
+struct User { id: Int, name: String, age: Int, email: String }
+
+struct ErrorBody { error: String }
+
+enum ApiError { BadJson, Invalid(rule: String) }
+
+fn error_response(status: Int, message: String) -> Response {
+  http.json(status, json.encode(ErrorBody { error: message }))
+}
+
+test "error_response builds a json error body" {
+  let r = error_response(400, "x")
+  assert_eq(r.status, 400)
+  assert_eq(r.body, "\{\"error\":\"x\"\}")
+}
+
+fn validate(n: NewUser) -> Result<User, ApiError> {
+  if n.name.is_empty() { return Err(ApiError.Invalid(rule: "name must not be empty")) }
+  if n.age < 0 || n.age > 150 { return Err(ApiError.Invalid(rule: "age must be between 0 and 150")) }
+  if !n.email.contains("@") { return Err(ApiError.Invalid(rule: "email must contain @")) }
+  Ok(User { id: 1, name: n.name, age: n.age, email: n.email })
+}
+
+test "validate checks name, age and email" {
+  let ok = NewUser { name: "Ann", age: 30, email: "ann@example.com" }
+  assert_eq(validate(ok), Ok(User { id: 1, name: "Ann", age: 30, email: "ann@example.com" }))
+  assert_eq(validate(NewUser { ..ok, name: "" }), Err(ApiError.Invalid(rule: "name must not be empty")))
+  assert_eq(validate(NewUser { ..ok, age: -1 }), Err(ApiError.Invalid(rule: "age must be between 0 and 150")))
+  assert_eq(validate(NewUser { ..ok, age: 151 }), Err(ApiError.Invalid(rule: "age must be between 0 and 150")))
+  assert_eq(validate(NewUser { ..ok, email: "nope" }), Err(ApiError.Invalid(rule: "email must contain @")))
+  assert(validate(NewUser { ..ok, age: 0 }).is_ok())
+  assert(validate(NewUser { ..ok, age: 150 }).is_ok())
+}
+
+fn create_user(body: String) -> Result<User, ApiError> {
+  match json.decode<NewUser>(body) {
+    Ok(n) => validate(n)
+    Err(_) => Err(ApiError.BadJson)
+  }
+}
+
+test "create_user separates bad json from invalid input" {
+  assert_eq(create_user("\{\"name\":\"Ann\",\"age\":30,\"email\":\"a@b\"\}"), Ok(User { id: 1, name: "Ann", age: 30, email: "a@b" }))
+  assert_eq(create_user("\{x"), Err(ApiError.BadJson))
+  assert_eq(create_user("\{\"name\":\"Ann\"\}"), Err(ApiError.BadJson))
+  assert_eq(create_user("\{\"name\":\"\",\"age\":30,\"email\":\"a@b\"\}"), Err(ApiError.Invalid(rule: "name must not be empty")))
+}
+
+fn post_user(body: String) -> Response {
+  match create_user(body) {
+    Ok(u) => http.json(201, json.encode(u))
+    Err(ApiError.Invalid(rule: rule)) => error_response(400, rule)
+    Err(ApiError.BadJson) => error_response(400, "bad json")
+  }
+}
+
+test "post_user answers 201 or 400" {
+  let created = post_user("\{\"name\":\"Ann\",\"age\":30,\"email\":\"ann@example.com\"\}")
+  assert_eq(created.status, 201)
+  assert_eq(created.body, "\{\"id\":1,\"name\":\"Ann\",\"age\":30,\"email\":\"ann@example.com\"\}")
+  assert_eq(created.headers.get("content-type"), Some("application/json"))
+  let bad = post_user("not json")
+  assert_eq(bad.status, 400)
+  assert_eq(bad.body, "\{\"error\":\"bad json\"\}")
+}
+
+fn get_user(raw_id: String) -> Response {
+  match Int.parse(raw_id) {
+    Ok(id) if id > 0 => http.json(200, json.encode(User { id: id, name: "user{id}", age: 30, email: "user{id}@example.com" }))
+    _ => error_response(404, "not found")
+  }
+}
+
+test "get_user needs a positive integer id" {
+  let r = get_user("7")
+  assert_eq(r.status, 200)
+  assert_eq(r.body, "\{\"id\":7,\"name\":\"user7\",\"age\":30,\"email\":\"user7@example.com\"\}")
+  // ASSUMED: Int.parse returns Err for "", "abc" and "1x", and Ok(-3) for "-3"
+  assert_eq(get_user("0").status, 404)
+  assert_eq(get_user("-3").status, 404)
+  assert_eq(get_user("abc").status, 404)
+  assert_eq(get_user("").body, "\{\"error\":\"not found\"\}")
+}
+
+fn route_user(req: Request) -> Response {
+  if req.method == "GET" && req.path.starts_with(USERS_PREFIX) {
+    get_user(req.path.slice(USERS_PREFIX.len(), req.path.len()))
+  } else {
+    http.response(404, "not found")
+  }
+}
+
+test "route_user only serves GET /users/<id>" {
+  assert_eq(route_user(http.request("GET", "/users/2", "")).status, 200)
+  assert_eq(route_user(http.request("POST", "/users/2", "")).body, "not found")
+  assert_eq(route_user(http.request("GET", "/other", "")).body, "not found")
+}
+
+fn handle(req: Request) -> Response {
+  match "{req.method} {req.path}" {
+    "GET /health" => http.response(200, "ok")
+    "POST /users" => post_user(req.body)
+    _ => route_user(req)
+  }
+}
+
+fn main() -> Unit { http.serve(8080, handle) }
+
+test "GET /health" {
+  let r = handle(http.request("GET", "/health", ""))
+  assert_eq(r.status, 200)
+  assert_eq(r.body, "ok")
+}
+
+test "POST /users succeeds" {
+  let r = handle(http.request("POST", "/users", "\{\"name\":\"Ann\",\"age\":30,\"email\":\"ann@example.com\"\}"))
+  assert_eq(r.status, 201)
+  assert_eq(r.body, "\{\"id\":1,\"name\":\"Ann\",\"age\":30,\"email\":\"ann@example.com\"\}")
+}
+
+test "POST /users reports the failed rule" {
+  let no_name = handle(http.request("POST", "/users", "\{\"name\":\"\",\"age\":30,\"email\":\"a@b\"\}"))
+  assert_eq(no_name.status, 400)
+  assert_eq(no_name.body, "\{\"error\":\"name must not be empty\"\}")
+  let old = handle(http.request("POST", "/users", "\{\"name\":\"Ann\",\"age\":151,\"email\":\"a@b\"\}"))
+  assert_eq(old.status, 400)
+  assert_eq(old.body, "\{\"error\":\"age must be between 0 and 150\"\}")
+  let no_at = handle(http.request("POST", "/users", "\{\"name\":\"Ann\",\"age\":30,\"email\":\"ann\"\}"))
+  assert_eq(no_at.status, 400)
+  assert_eq(no_at.body, "\{\"error\":\"email must contain @\"\}")
+}
+
+test "POST /users rejects malformed or ill-shaped bodies" {
+  let broken = handle(http.request("POST", "/users", "\{x"))
+  assert_eq(broken.status, 400)
+  assert_eq(broken.body, "\{\"error\":\"bad json\"\}")
+  let shaped = handle(http.request("POST", "/users", "\{\"name\":\"Ann\",\"age\":\"old\",\"email\":\"a@b\"\}"))
+  assert_eq(shaped.status, 400)
+  assert_eq(shaped.body, "\{\"error\":\"bad json\"\}")
+}
+
+test "GET /users/<id>" {
+  let r = handle(http.request("GET", "/users/42", ""))
+  assert_eq(r.status, 200)
+  assert_eq(r.body, "\{\"id\":42,\"name\":\"user42\",\"age\":30,\"email\":\"user42@example.com\"\}")
+  let missing = handle(http.request("GET", "/users/abc", ""))
+  assert_eq(missing.status, 404)
+  assert_eq(missing.body, "\{\"error\":\"not found\"\}")
+  assert_eq(handle(http.request("GET", "/users/0", "")).status, 404)
+}
+
+test "everything else is 404 not found" {
+  let r = handle(http.request("GET", "/nope", ""))
+  assert_eq(r.status, 404)
+  assert_eq(r.body, "not found")
+  assert_eq(handle(http.request("DELETE", "/users", "")).body, "not found")
+  assert_eq(handle(http.request("GET", "/users", "")).body, "not found")
+}

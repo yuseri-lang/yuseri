@@ -433,7 +433,16 @@ static void fmt_expr(F *f, Expr *e, int min_prec) {
     case E_INT: case E_FLOAT: case E_IDENT: buf_str(f->out, e->text); break;
     case E_BOOL: buf_puts(f->out, e->bool_val ? "true" : "false"); break;
     case E_STRING: buf_push(f->out, '"'); buf_str(f->out, e->text); buf_push(f->out, '"'); break;
-    case E_FIELD: fmt_expr(f, e->a, 8); buf_push(f->out, '.'); buf_str(f->out, e->text); break;
+    case E_FIELD:
+      fmt_expr(f, e->a, 8);
+      buf_push(f->out, '.');
+      buf_str(f->out, e->text);
+      if (e->explicit_types.len) {
+        buf_push(f->out, '<');
+        for (int i = 0; i < e->explicit_types.len; i++) { if (i) buf_puts(f->out, ", "); fmt_type(f, e->explicit_types.items[i]); }
+        buf_push(f->out, '>');
+      }
+      break;
     case E_INDEX: {
       fmt_expr(f, e->a, 8);
       buf_push(f->out, '[');

@@ -29,6 +29,16 @@ void yu_arena_reset(void) {
   while (g_arena) { Chunk *n = g_arena->next; free(g_arena); g_arena = n; }
 }
 
+yu_arena_mark yu_arena_mark_now(void) {
+  yu_arena_mark m = {g_arena, g_arena ? g_arena->used : 0};
+  return m;
+}
+
+void yu_arena_release(yu_arena_mark m) {
+  while (g_arena && g_arena != m.chunk) { Chunk *n = g_arena->next; free(g_arena); g_arena = n; }
+  if (g_arena) g_arena->used = m.used;
+}
+
 // ---- failures -------------------------------------------------------------
 
 typedef struct { const char *id; const char *hint; } Hint;
@@ -43,8 +53,12 @@ static const char *hint_for(const char *id) {
   return "see errors.md";
 }
 
-static jmp_buf g_test_jmp;
-static bool g_in_test = false;
+static jmp_buf g_catch[8];
+static int g_ncatch = 0;
+
+void yu_catch_push(void) { if (g_ncatch < 8) g_ncatch++; }
+jmp_buf *yu_catch_buf(void) { return &g_catch[g_ncatch - 1]; }
+void yu_catch_end(void) { if (g_ncatch > 0) g_ncatch--; }
 
 void yu_fail(const char *id, const char *loc, const char *fmt, ...) {
   fprintf(stderr, "%s %s ", id, loc);
@@ -53,7 +67,7 @@ void yu_fail(const char *id, const char *loc, const char *fmt, ...) {
   vfprintf(stderr, fmt, ap);
   va_end(ap);
   fprintf(stderr, "; %s\n", hint_for(id));
-  if (g_in_test) longjmp(g_test_jmp, 1);
+  if (g_ncatch > 0) { int i = --g_ncatch; longjmp(g_catch[i], 1); }
   exit(1);
 }
 
@@ -380,12 +394,10 @@ void yu_assert_eq_fail(const char *loc, yu_str left, yu_str right) {
 
 int yu_test_run(const char *name, void (*fn)(void)) {
   g_tests++;
-  g_in_test = true;
   yu_request_id = (yu_str){(const uint8_t *)name, (int64_t)strlen(name)};
   bool ok;
-  if (setjmp(g_test_jmp) == 0) { fn(); ok = true; }
+  if (yu_catch_begin()) { fn(); yu_catch_end(); ok = true; }
   else ok = false;
-  g_in_test = false;
   if (ok) printf("ok   %s\n", name);
   else { printf("fail %s\n", name); g_failed++; }
   fflush(stdout);

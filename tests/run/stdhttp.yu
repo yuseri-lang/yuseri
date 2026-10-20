@@ -38,7 +38,7 @@ test "query strings and request ids" {
   assert_eq(req.path, "/greet")
   assert_eq(req.query.get("name"), Some("A B"))
   assert_eq(req.query.get("x"), Some("1"))
-  assert_eq(req.id, "test")
+  assert_eq(req.id, "query strings and request ids")
   assert_eq(handle(req).body, "hi A B")
   assert_eq(handle(http.request("GET", "/greet", "")).body, "hi stranger")
 }

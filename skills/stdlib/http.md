@@ -17,7 +17,7 @@ After `import std.http` these types are used by their plain names (`Request`, no
 - `http.serve_with(net: Net, opts: Serve, handler: fn(Request) -> Response) -> Unit` is `serve` with the deadline in milliseconds and the worker count (`None`: one per CPU): `http.serve_with(sys.net, Serve { port: 8080, deadline_ms: 5000, workers: None }, handle)`.
 - `http.response(status: Int, body: String) -> Response` with `content-type: text/plain; charset=utf-8`.
 - `http.json(status: Int, body: String) -> Response` with `content-type: application/json`.
-- `http.request(method: String, path: String, body: String) -> Request` builds a request for tests; `path` may carry a query string. `id` is `test`.
+- `http.request(method: String, path: String, body: String) -> Request` builds a request for tests; `path` may carry a query string. `id` is the test name, the same id that log lines and traces carry in that test.
 
 ## Routing
 

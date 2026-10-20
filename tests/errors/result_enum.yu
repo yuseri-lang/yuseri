@@ -1,0 +1,7 @@
+// E-RES-03: the E of Result must be an enum
+fn parse_age(s: String) -> Result<Int, String> {
+  match Int.parse(s) {
+    Ok(n) if n >= 0 => Ok(n)
+    _ => Err("bad age")
+  }
+}

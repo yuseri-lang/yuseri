@@ -1,0 +1,1 @@
+E-RES-03 tests/errors/result_enum.yu:2 the error type of Result must be an enum, got String; define an enum for the error (`enum AppError { NotFound, Invalid(rule: String) }`) and use it as E

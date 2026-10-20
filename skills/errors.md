@@ -33,6 +33,7 @@ Every error is one line: `<ID> <file>:<line> <message>; <fix hint>`. When a decl
 
 - **E-RES-01** unused `Result`. A `Result` value is not bound, passed, matched, or followed by `?`. Fix: add `?`, `match` it, or bind it (`let _ = expr` counts and means "ignored on purpose").
 - **E-RES-02** `?` outside a matching function. The function does not return `Result` with this `E` (or `Option` for `?` on `Option`). Fix: change the return type to `Result<T, E>` so callers use `?` too; `match` with a default only when that default is correct.
+- **E-RES-03** the error type of Result must be an enum, got `String` (or another non-enum). `E` carries the trace, so it must be an enum you define (core.md 13). Fix: define an enum for the error (`enum AppError { NotFound, Invalid(rule: String) }`) and use it as E; keep the message text in a variant field.
 
 ## E-MATCH: pattern matching
 

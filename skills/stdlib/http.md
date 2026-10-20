@@ -1,18 +1,20 @@
 # std.http
 
-`import std.http`. A minimal HTTP/1.1 server: one request at a time, one handler function.
+`import std.http`. A minimal HTTP/1.1 server: one worker per CPU, each handling one request at a time; one handler function.
 
 ## Types
 
 ```
 struct Request { id: String, method: String, path: String, query: Map<String, String>, headers: Map<String, String>, body: String }
 struct Response { status: Int, headers: Map<String, String>, body: String }
+struct Serve { port: Int, deadline_ms: Int, workers: Option<Int> }
 ```
-After `import std.http` these two types are used by their plain names (`Request`, not `http.Request`); the functions keep the `http.` prefix. `id` is the request id; it is also the first entry of every error trace created while handling the request. `method` is upper-case (`GET`). `path` has no query string and is percent-decoded; a trailing `/` is kept as written. `query` holds the decoded `?a=1&b=2` pairs. Header names are lower-case.
+After `import std.http` these types are used by their plain names (`Request`, not `http.Request`); the functions keep the `http.` prefix. `id` is the request id; it is also the first entry of every error trace created while handling the request. `method` is upper-case (`GET`). `path` has no query string and is percent-decoded; a trailing `/` is kept as written. `query` holds the decoded `?a=1&b=2` pairs. Header names are lower-case.
 
 ## Functions
 
-- `http.serve(net: Net, port: Int, handler: fn(Request) -> Response) -> Unit` needs the `Net` capability from `main(sys: System)` (runtime.md 3) and listens on `port` and calls `handler` for every request. It never returns. A `panic` inside the handler answers `500` and the server keeps running. Malformed or incomplete requests are answered with `400`, headers over 64 KiB or bodies over 1 MiB with `413`, without reaching the handler.
+- `http.serve(net: Net, port: Int, handler: fn(Request) -> Response) -> Unit` needs the `Net` capability from `main(sys: System)` (runtime.md 3) and listens on `port` and calls `handler` for every request. It never returns. A `panic` inside the handler, or a request past its deadline (`R-TIME-01`, 30 seconds), answers `500` and the server keeps running. Malformed or incomplete requests are answered with `400`, headers over 64 KiB or bodies over 1 MiB with `413`, without reaching the handler.
+- `http.serve_with(net: Net, opts: Serve, handler: fn(Request) -> Response) -> Unit` is `serve` with the deadline in milliseconds and the worker count (`None`: one per CPU): `http.serve_with(sys.net, Serve { port: 8080, deadline_ms: 5000, workers: None }, handle)`.
 - `http.response(status: Int, body: String) -> Response` with `content-type: text/plain; charset=utf-8`.
 - `http.json(status: Int, body: String) -> Response` with `content-type: application/json`.
 - `http.request(method: String, path: String, body: String) -> Request` builds a request for tests; `path` may carry a query string. `id` is `test`.

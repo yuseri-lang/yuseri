@@ -1,8 +1,11 @@
 // Yuseri Stage 0 runtime: what generated C code calls.
-// Every allocation comes from one arena (reset per test); nothing is freed individually.
+// Every allocation comes from the current arena (one per worker thread, reset per request or
+// per test); nothing is freed individually. The arena, the catch stack, the request id and the
+// deadline are thread-local: a worker never sees another worker's request.
 #ifndef YU_RT_H
 #define YU_RT_H
 
+#include <pthread.h>
 #include <setjmp.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -36,8 +39,15 @@ typedef struct {
   void *value;      // T, allocated in `arena`
   int64_t vsz;
   yu_arena *arena;  // owns `value` and everything it points to
+  pthread_mutex_t mu;        // serializes get / set / update across workers
+  yu_arena *pending, *prev_arena;  // a begun but not yet committed update (released on failure)
 } yu_store;
 yu_store *yu_store_new(int64_t vsz);
+// Every access is bracketed by lock / unlock: get copies under the lock; set and update hold it
+// from reading the current value to commit. lock fails with R-STORE-02 when this thread already
+// holds it (update inside update). yu_fail releases whatever the failing thread holds.
+void yu_store_lock(yu_store *s, const char *loc);
+void yu_store_unlock(yu_store *s);
 // update protocol: begin switches allocation to a fresh arena so the generated code can deep-copy
 // the new value into it; commit installs that copy and frees the previous arena; abort discards it.
 yu_arena *yu_store_begin(yu_store *s);
@@ -52,6 +62,14 @@ void yu_catch_end(void);
 
 // ---- failures: prints "<ID> <loc> <message>; <hint>" then unwinds to the test harness or exits
 void yu_fail(const char *id, const char *loc, const char *fmt, ...) __attribute__((noreturn, format(printf, 3, 4)));
+
+// ---- deadlines (layer 2, runtime.md 5): checked on allocation, at every loop iteration and on I/O
+int64_t yu_now_ms(void);                        // monotonic milliseconds
+void yu_deadline_set(int64_t at_ms, int64_t len_ms);  // 0 = no deadline
+int64_t yu_deadline_remaining_ms(void);         // 0 when none or already passed
+void yu_deadline_check(void);                   // R-TIME-01 when passed
+extern _Thread_local uint32_t yu_ticks;
+#define yu_tick() ((void)((++yu_ticks & 4095u) == 0 ? (yu_deadline_check(), 0) : 0))
 
 // ---- integers (R-INT-01 overflow, R-INT-02 division by zero)
 int64_t yu_add(int64_t a, int64_t b, const char *loc);
@@ -111,7 +129,10 @@ yu_map yu_map_copy(yu_map m, int64_t vsz);
 yu_list yu_map_entries(yu_map m, int64_t vsz, int64_t voff, int64_t esz);
 
 // ---- error traces: the request id, then one "file:line" per Err and `?`
-extern yu_str yu_request_id;
+extern _Thread_local yu_str yu_request_id;
+// Under http.serve every stderr line starts with the request id, error lines included, so one
+// grep for the id shows everything the request did. Tests print error lines as they are.
+extern _Thread_local bool yu_serving;
 void yu_trace_add(yu_list *trace, const char *loc);
 
 // ---- tests and assertions

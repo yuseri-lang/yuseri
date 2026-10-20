@@ -1,0 +1,14 @@
+// Store: touching the same Store inside its own update function is R-STORE-02. The request
+// fails (here: the test), the value is unchanged, and the lock is released.
+// This test is expected to fail.
+test "update inside an update of the same store fails with R-STORE-02" {
+  let n = Store.new(1)
+  n.update(fn(v: Int) -> Int { n.update(fn(w: Int) -> Int { w + 1 }) + v })
+  assert_eq(n.get(), 1)
+}
+
+test "a store can be read inside another store's update" {
+  let a = Store.new(1)
+  let b = Store.new(10)
+  assert_eq(b.update(fn(v: Int) -> Int { v + a.get() }), 11)
+}

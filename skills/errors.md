@@ -84,6 +84,11 @@ Every error is one line: `<ID> <file>:<line> <message>; <fix hint>`. When a decl
 ## R-STORE: Store
 
 - **R-STORE-01** the function passed to `update` panicked (its own error line comes first). The stored value is unchanged and the request fails. Fix: make the update function total, or validate before calling `update`.
+- **R-STORE-02** `update`, `set` or `get` was called on a Store from inside that same Store's update function. The value is unchanged and the request fails. Fix: compute the new value from the function's argument only; other Stores may be read.
+
+## R-TIME: deadlines
+
+- **R-TIME-01** the request passed its deadline (30 seconds unless `http.serve_with` sets another). The client gets `500` and the request's memory is freed. Fix: make the handler faster, or give `http.serve_with` a longer deadline.
 
 ## R-APP: application errors
 

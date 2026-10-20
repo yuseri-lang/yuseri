@@ -9,7 +9,8 @@ static const char *STD_JSON_SRC =
     "enum JsonError { Syntax(at: Int), Shape(path: String, expected: String) }\n";
 static const char *STD_HTTP_SRC =
     "struct Request { id: String, method: String, path: String, query: Map<String, String>, headers: Map<String, String>, body: String }\n"
-    "struct Response { status: Int, headers: Map<String, String>, body: String }\n";
+    "struct Response { status: Int, headers: Map<String, String>, body: String }\n"
+    "struct Serve { port: Int, deadline_ms: Int, workers: Option<Int> }\n";
 static const char *STD_SYSTEM_SRC =
     "struct System { net: Net, fs: Fs, env: Env, clock: Clock, random: Random, log: Log, tasks: Tasks }\n";
 
@@ -1080,10 +1081,14 @@ static Ty *infer_call(C *c, Expr *e, Ty *expected) {
       if (str_eq_c(tn, "http")) {
         Decl *rq = find_decl(&c->structs, STR_LIT("Request")), *rs = find_decl(&c->structs, STR_LIT("Response"));
         Ty *req = ty_named(a, TY_STRUCT, STR_LIT("Request"), rq), *res = ty_named(a, TY_STRUCT, STR_LIT("Response"), rs);
-        if (str_eq_c(fnm, "serve")) {
-          check_arg_count(c, e, 3, "http.serve");
+        if (str_eq_c(fnm, "serve") || str_eq_c(fnm, "serve_with")) {
+          bool with = str_eq_c(fnm, "serve_with");
+          check_arg_count(c, e, 3, with ? "http.serve_with" : "http.serve");
           arg_or_err(c, e, 0, ty_named(a, TY_CAP, STR_LIT("Net"), NULL));
-          arg_or_err(c, e, 1, ty_prim(TY_INT));
+          if (with) {
+            Decl *sd = find_decl(&c->structs, STR_LIT("Serve"));
+            arg_or_err(c, e, 1, ty_named(a, TY_STRUCT, STR_LIT("Serve"), sd));
+          } else arg_or_err(c, e, 1, ty_prim(TY_INT));
           TyVec ps = {0};
           VEC_PUSH(a, &ps, req);
           arg_or_err(c, e, 2, ty_fn(a, ps, res));

@@ -30,3 +30,6 @@ jobs:
 
       - name: HTTP load test
         run: sh tests/load_http.sh
+
+      - name: HTTP deadline test
+        run: sh tests/deadline_http.sh

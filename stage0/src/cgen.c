@@ -1367,11 +1367,11 @@ static const char *gen_builtin(G *g, Expr *e) {
           else emit(g, "%s %s = *(%s *)%s->value;", tt, cur, tt, st);
           if (IS("update")) {
             emit(g, "%s %s;", tt, nv);
-            emit(g, "if (yu_catch_begin()) { yu_cs_push(%s); %s = %s.fn(%s.env, %s); yu_cs_pop(); yu_catch_end(); } else { yu_fail(\"R-STORE-01\", %s, \"update function panicked; value unchanged\"); }", loc(g, e->line), nv, f, f, cur, loc(g, e->line));
+            emit(g, "if (yu_catch_begin()) { const char *lp_ = yu_loop_loc; yu_cs_push(%s); %s = %s.fn(%s.env, %s); yu_cs_pop(); yu_loop_loc = lp_; yu_catch_end(); } else { yu_fail(\"R-STORE-01\", %s, \"update function panicked; value unchanged\"); }", loc(g, e->line), nv, f, f, cur, loc(g, e->line));
           } else {
             res = newtmp(g);
             emit(g, "%s %s;", ctype(g, t), res);
-            emit(g, "if (yu_catch_begin()) { yu_cs_push(%s); %s = %s.fn(%s.env, %s); yu_cs_pop(); yu_catch_end(); } else { yu_fail(\"R-STORE-01\", %s, \"update function panicked; value unchanged\"); }", loc(g, e->line), res, f, f, cur, loc(g, e->line));
+            emit(g, "if (yu_catch_begin()) { const char *lp_ = yu_loop_loc; yu_cs_push(%s); %s = %s.fn(%s.env, %s); yu_cs_pop(); yu_loop_loc = lp_; yu_catch_end(); } else { yu_fail(\"R-STORE-01\", %s, \"update function panicked; value unchanged\"); }", loc(g, e->line), res, f, f, cur, loc(g, e->line));
             emit(g, "%s %s = %s.val;", tt, nv, res);
             emit(g, "if (%s.ok) {", res);
             g->indent++;
@@ -1601,12 +1601,14 @@ static const char *gen_module_call(G *g, Expr *e) {
 }
 
 // A call into user code: the call site is pushed on the shadow stack for the duration of the
-// call, so a runtime error inside names its callers. The arguments are already evaluated.
+// call, so a runtime error inside names its callers. The loop position is restored afterwards,
+// because the callee may have returned from inside one of its loops. The arguments are already
+// evaluated.
 static const char *gen_user_call(G *g, Expr *e, const char *call) {
-  const char *r = newtmp(g);
-  emit(g, "yu_cs_push(%s);", loc(g, e->line));
+  const char *r = newtmp(g), *lp = newtmp(g);
+  emit(g, "const char *%s = yu_loop_loc; yu_cs_push(%s);", lp, loc(g, e->line));
   emit(g, "%s %s = %s;", ctype(g, sub(g, e->ty)), r, call);
-  emit(g, "yu_cs_pop();");
+  emit(g, "yu_cs_pop(); yu_loop_loc = %s;", lp);
   return r;
 }
 
@@ -1776,6 +1778,9 @@ static void gen_stmts(G *g, Block *b) {
       case S_FOR: {
         Expr *it = s->value;
         int loop_mark = scope_push(g);
+        // R-TIME-01 names the loop being run: the position is restored when this loop ends
+        const char *lp = newtmp(g);
+        emit(g, "const char *%s = yu_loop_loc;", lp);
         if (it->kind == E_BINARY && it->op == T_DOTDOT) {
           const char *lo = gen_temp(g, it->a), *hi = gen_temp(g, it->b);
           const char *i = newtmp(g);
@@ -1796,10 +1801,13 @@ static void gen_stmts(G *g, Block *b) {
         gen_block_into(g, s->body, NULL, NULL);
         g->indent--;
         emit(g, "}");
+        emit(g, "yu_loop_loc = %s;", lp);
         scope_pop(g, loop_mark);
         break;
       }
       case S_WHILE: {
+        const char *lp = newtmp(g);
+        emit(g, "const char *%s = yu_loop_loc;", lp);
         emit(g, "for (;;) {");
         g->indent++;
         emit(g, "yu_tick_at(%s);", loc(g, s->line));
@@ -1808,6 +1816,7 @@ static void gen_stmts(G *g, Block *b) {
         gen_block_into(g, s->body, NULL, NULL);
         g->indent--;
         emit(g, "}");
+        emit(g, "yu_loop_loc = %s;", lp);
         break;
       }
     }

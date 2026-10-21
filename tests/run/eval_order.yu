@@ -1,0 +1,69 @@
+// core.md 5: operands and call arguments are evaluated left to right, whatever each of them is
+// (a builtin call, a call into user code, an index). Random.seeded makes the order observable.
+fn draw(r: Random, max: Int) -> Int { r.int(max) }
+
+// the two draws in source order, as separate statements: what every test below must reproduce
+fn in_order(r: Random, max: Int) -> List<Int> {
+  let first = r.int(max)
+  let second = draw(r, max)
+  assert(first != second)
+  [first, second]
+}
+
+fn pair(a: Int, b: Int) -> Int { a * 1000 + b }
+
+struct Box { n: Int }
+
+impl Box {
+  fn plus(self, m: Int) -> Int { self.n * 1000 + m }
+}
+
+test "the left operand runs before a user call on the right" {
+  let want = in_order(Random.seeded(42), 1000)
+  let r = Random.seeded(42)
+  assert_eq(r.int(1000) * 1000 + draw(r, 1000), pair(want[0], want[1]))
+}
+
+test "arguments of a user function run left to right" {
+  let want = in_order(Random.seeded(42), 1000)
+  let r = Random.seeded(42)
+  assert_eq(pair(r.int(1000), draw(r, 1000)), pair(want[0], want[1]))
+}
+
+test "the receiver of a method runs before its arguments" {
+  let want = in_order(Random.seeded(1), 3)
+  let r = Random.seeded(1)
+  let boxes = [Box { n: 0 }, Box { n: 1 }, Box { n: 2 }]
+  assert_eq(boxes[r.int(3)].plus(draw(r, 3)), pair(want[0], want[1]))
+}
+
+test "the receiver of a builtin method runs before its arguments" {
+  let want = in_order(Random.seeded(1), 3)
+  let r = Random.seeded(1)
+  let texts = ["a", "b", "c"]
+  assert_eq(texts[r.int(3)].repeat(draw(r, 3)), texts[want[0]].repeat(want[1]))
+}
+
+test "arguments of a builtin method run left to right" {
+  let want = in_order(Random.seeded(1), 3)
+  let r = Random.seeded(1)
+  let digits = "0123456789"
+  assert_eq(
+    digits.slice(r.int(3), 5 + draw(r, 3)),
+    digits.slice(want[0], 5 + want[1]),
+  )
+}
+
+test "a Map update takes its key before its value" {
+  let want = in_order(Random.seeded(42), 1000)
+  let r = Random.seeded(42)
+  var m = Map<Int, Int>()
+  m.set(r.int(1000), draw(r, 1000))
+  assert_eq(m.get(want[0]), Some(want[1]))
+}
+
+test "interpolation runs left to right" {
+  let want = in_order(Random.seeded(42), 1000)
+  let r = Random.seeded(42)
+  assert_eq("{r.int(1000)}-{draw(r, 1000)}", "{want[0]}-{want[1]}")
+}

@@ -1,0 +1,38 @@
+// runtime errors name the call sites that led to them (nearest first, at most 8)
+fn ceil_div(a: Int, b: Int) -> Int { (a + b - 1) / b }
+
+fn boxes_for(qty: Int, pack: Int) -> Int { ceil_div(qty, pack) }
+
+fn plan(qty: Int, pack: Int) -> Int { boxes_for(qty, pack) }
+
+test "a division inside a helper names its callers" {
+  assert_eq(plan(10, 5), 2)
+  assert_eq(plan(10, 0), 0)
+}
+
+fn apply(f: fn(Int) -> Int, x: Int) -> Int { f(x) }
+
+test "a call through a function value is a hop" {
+  assert_eq(apply(fn(x: Int) -> Int { x / 0 }, 1), 0)
+}
+
+fn deep(n: Int) -> Int { if n == 0 { 1 / 0 } else { deep(n - 1) } }
+
+test "deep recursion shows eight hops and counts the rest" { assert_eq(deep(20), 0) }
+
+struct Counter { n: Int }
+
+impl Counter {
+  fn halve(self, by: Int) -> Int { self.n / by }
+}
+
+test "a method call is a hop" { assert_eq(Counter { n: 4 }.halve(0), 0) }
+
+test "the update function of a Store is a hop" {
+  let s = Store.new(1)
+  let _ = s.update(fn(n: Int) -> Int { n / 0 })
+}
+
+test "a failure in a later test starts from an empty stack" { assert_eq(boxes_for(1, 0), 0) }
+
+test "a test that passes after failures" { assert_eq(plan(7, 3), 3) }

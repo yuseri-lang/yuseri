@@ -233,6 +233,8 @@ void yu_http_handle_connection(yu_http_handler h, int fd, int64_t deadline_ms) {
   char idbuf[32];
   snprintf(idbuf, sizeof idbuf, "req-%lld", (long long)(++g_counter));
   yu_request_id = yu_str_lit(idbuf, (int64_t)strlen(idbuf));
+  yu_csd = 0;
+  yu_loop_loc = NULL;
   yu_http_request req;
   yu_http_response res;
   int status;  // 0 = handled, else the status to answer with

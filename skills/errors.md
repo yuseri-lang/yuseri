@@ -1,6 +1,6 @@
 # Yuseri errors
 
-Every error is one line: `<ID> <file>:<line> <message>; <fix hint>`. When a declared type is known, the message names it. Find the ID below, apply the fix, re-run. Compile errors are `E-`, runtime errors `R-`. `<AREA>` names the part of `core.md` to re-read.
+Every error is one line: `<ID> <file>:<line> <message>; <fix hint>`. A runtime error raised inside a function adds `; called from <file>:<line>, ...` before the hint: the call sites that led to it, nearest first, at most 8. When a declared type is known, the message names it. Find the ID below, apply the fix, re-run. Compile errors are `E-`, runtime errors `R-`. `<AREA>` names the part of `core.md` to re-read.
 
 ## E-SYN: syntax
 
@@ -72,7 +72,7 @@ Every error is one line: `<ID> <file>:<line> <message>; <fix hint>`. When a decl
 
 ## R-PANIC
 
-- **R-PANIC-01** panic: <message>. The request stopped at an impossible state. The trace lists the request id and `file:line` hops. Fix: if the state is possible, return `Err` instead of `panic`.
+- **R-PANIC-01** panic: <message>. The request stopped at an impossible state; `called from` lists the call sites that led to the `panic`. Fix: if the state is possible, return `Err` instead of `panic`.
 
 ## R-ASSERT: tests
 
@@ -89,7 +89,7 @@ Every error is one line: `<ID> <file>:<line> <message>; <fix hint>`. When a decl
 
 ## R-TIME: deadlines
 
-- **R-TIME-01** request <method> <path> exceeded its deadline (30 seconds unless `http.serve_with` sets another). The client gets `500` and the request's memory is freed. The line names the request, not a source position: reproduce that request in a `test` to find the loop. Fix: find the loop or call that never ends for this request; a longer deadline (`http.serve_with`) only helps when the work is legitimately slow.
+- **R-TIME-01** request <method> <path> exceeded its deadline (30 seconds unless `http.serve_with` sets another). The client gets `500` and the request's memory is freed. The position is the loop that was running when the deadline passed, and `called from` lists how it was reached; the message names the request. Fix: find the loop or call that never ends for this request; a longer deadline (`http.serve_with`) only helps when the work is legitimately slow.
 
 ## R-TASK: spawned tasks
 

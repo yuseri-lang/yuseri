@@ -1,0 +1,32 @@
+# Build the Stage 0 compiler and run every test on macOS and Linux.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: make
+
+      # golden / errors / programs / rt / check_errors
+      - name: Test
+        run: make test
+
+      # These bind port 8080, so they are not part of `make test`.
+      - name: HTTP smoke test
+        run: sh tests/smoke_http.sh
+
+      - name: HTTP load test
+        run: sh tests/load_http.sh

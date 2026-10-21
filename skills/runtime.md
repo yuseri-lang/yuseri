@@ -30,13 +30,13 @@ fn main(sys: System) -> Unit {
   http.serve(sys.net, 8080, fn(req: Request) -> Response { handle(req, hits, sys.clock) })
 }
 ```
-Only `main` receives `System`; a capability cannot be stored in a `Store` or compared (`E-CAP-01`). So a signature says what a function can reach: `fn validate(u: User) -> Result<User, E>` cannot open a socket or read a file. Capabilities are used through methods, except `Net`, which `http.serve` takes; they may sit in a struct you pass around, and all workers share them safely.
+Only `main` receives `System`; a capability cannot be stored in a `Store` or compared (`E-CAP-01`). So a signature says what a function can reach: `fn validate(u: User) -> Result<User, E>` cannot open a socket or read a file. Capabilities are used through methods, except `Net`, which `http.serve` takes. Capabilities and stores are handles: a copy (in a struct, a capture) points to the same thing, and all workers share them safely. These types need no import.
 
 | Capability | Use | In tests |
 |---|---|---|
 | `Net` | `http.serve(net, port, handler)`; `http.serve_with(net, Serve { port: 8080, deadline_ms: 5000, workers: None }, handler)` sets the deadline and workers (`None`: one per CPU) | call the handler with `http.request(...)` |
 | `Clock` | `clock.now() -> Int` (Unix milliseconds) | `Clock.fixed(1000) -> Clock` |
-| `Env` | `env.get("PORT") -> Option<String>` | `Env.of(m: Map<String, String>) -> Env` |
+| `Env` | `env.get("PORT") -> Option<String>`; a port with a default: `Int.parse(env.get("PORT").unwrap_or("8080")).unwrap_or(8080)` | `Env.of(m: Map<String, String>) -> Env` |
 | `Log` | `log.info(msg)`, `log.error(msg) -> Unit`. Every line is `<request id> <level> <msg>` (the prefix cannot be turned off): `req-7 info GET /x -> 200`; in a test the id is the test name, spaces included, the same as `req.id` | `Log.capture() -> Log`, then `log.lines() -> List<String>` |
 | `Fs` | `fs.read(path) -> Result<String, FsError>`, `fs.write(path, text) -> Result<Unit, FsError>`; `enum FsError { NotFound(path: String), Io(path: String, message: String) }` | `Fs.memory() -> Fs`, an empty in-memory disk |
 | `Random` | `random.int(max) -> Int`, uniform, `0 <= n < max` (`R-RAND-01` if `max <= 0`); each call advances the handle | `Random.seeded(42) -> Random`, the same sequence every run |

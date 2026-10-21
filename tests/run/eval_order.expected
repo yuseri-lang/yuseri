@@ -1,0 +1,8 @@
+ok   the left operand runs before a user call on the right
+ok   arguments of a user function run left to right
+ok   the receiver of a method runs before its arguments
+ok   the receiver of a builtin method runs before its arguments
+ok   arguments of a builtin method run left to right
+ok   a Map update takes its key before its value
+ok   interpolation runs left to right
+7 tests, 0 failed

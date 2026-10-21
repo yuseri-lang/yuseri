@@ -668,6 +668,25 @@ static const char *gen_temp(G *g, Expr *e) {
   return t;
 }
 
+// core.md 5: operands and call arguments are evaluated left to right. C leaves the order inside
+// one expression unspecified, and a later operand may emit statements (a call into user code,
+// `if`, `match`, `?`) that would run before a C expression still pending. So an operand that is
+// followed by another one is evaluated into a temporary first (`v` is its generated C). Literals
+// have no side effects and nothing can change them: they stay as they are.
+static const char *hoist(G *g, Expr *e, const char *v) {
+  if (e->kind == E_INT || e->kind == E_FLOAT || e->kind == E_BOOL) return v;
+  const char *t = newtmp(g);
+  emit(g, "%s %s = %s;", ctype(g, e->ty), t, v);
+  return t;
+}
+
+// Argument `i` of a builtin call, in order: hoisted unless it is the last one.
+static const char *gen_arg(G *g, Expr *call, int i) {
+  Expr *x = call->args.items[i];
+  const char *v = gen_expr(g, x);
+  return i + 1 < call->args.len ? hoist(g, x, v) : v;
+}
+
 static const char *fn_cname(G *g, Str name) { return sfmt(g, "y_%s", cs(g, name)); }
 static const char *method_cname(G *g, Str type, Str name) { return sfmt(g, "y_%s_%s", cs(g, type), cs(g, name)); }
 static const char *var_cname(G *g, Str name) { return sfmt(g, "v_%s", cs(g, name)); }
@@ -767,7 +786,7 @@ static const char *gen_expr(G *g, Expr *e) {
         emit(g, "for (int64_t i_ = %s; i_ < %s; i_++) yu_list_push(&%s, &i_, sizeof(int64_t));", lo, hi, r);
         return r;
       }
-      const char *l = gen_expr(g, e->a);
+      const char *l = hoist(g, e->a, gen_expr(g, e->a));  // left to right: `l` must not wait for what `r` emits
       const char *r = gen_expr(g, e->b);
       Ty *lt = sub(g, e->a->ty);
       bool is_int = lt->kind == TY_INT, is_float = lt->kind == TY_FLOAT, is_str = lt->kind == TY_STRING;
@@ -1171,7 +1190,9 @@ static const char *gen_args(G *g, Expr *call, const char *first) {
   Buf b = {0};
   if (first) buf_puts(&b, first);
   for (int i = 0; i < call->args.len; i++) {
-    const char *v = gen_value(g, call->args.items[i]);
+    Expr *x = call->args.items[i];
+    const char *v = gen_value(g, x);
+    if (i + 1 < call->args.len) v = hoist(g, x, v);  // left to right (core.md 5)
     if (b.len) buf_puts(&b, ", ");
     buf_puts(&b, v);
   }
@@ -1394,7 +1415,7 @@ static const char *gen_builtin(G *g, Expr *e) {
       break;
     }
     case TY_STRING: {
-      const char *s = gen_expr(g, obj);
+      const char *s = e->args.len ? hoist(g, obj, gen_expr(g, obj)) : gen_expr(g, obj);  // receiver first (core.md 5)
       if (IS("len")) return sfmt(g, "yu_str_len(%s)", s);
       if (IS("is_empty")) return sfmt(g, "yu_str_is_empty(%s)", s);
       if (IS("split")) return sfmt(g, "yu_str_split(%s, %s)", s, gen_expr(g, e->args.items[0]));
@@ -1408,10 +1429,10 @@ static const char *gen_builtin(G *g, Expr *e) {
         emit(g, "%s.some = yu_str_find(%s, %s, &%s.val);", r, s, gen_expr(g, e->args.items[0]), r);
         return r;
       }
-      if (IS("replace")) { const char *a0 = gen_expr(g, e->args.items[0]); const char *a1 = gen_expr(g, e->args.items[1]); return sfmt(g, "yu_str_replace(%s, %s, %s)", s, a0, a1); }
+      if (IS("replace")) { const char *a0 = gen_arg(g, e, 0); const char *a1 = gen_arg(g, e, 1); return sfmt(g, "yu_str_replace(%s, %s, %s)", s, a0, a1); }
       if (IS("to_upper")) return sfmt(g, "yu_str_to_upper(%s)", s);
       if (IS("to_lower")) return sfmt(g, "yu_str_to_lower(%s)", s);
-      if (IS("slice")) { const char *a0 = gen_expr(g, e->args.items[0]); const char *a1 = gen_expr(g, e->args.items[1]); return sfmt(g, "yu_str_slice(%s, %s, %s, %s)", s, a0, a1, L); }
+      if (IS("slice")) { const char *a0 = gen_arg(g, e, 0); const char *a1 = gen_arg(g, e, 1); return sfmt(g, "yu_str_slice(%s, %s, %s, %s)", s, a0, a1, L); }
       if (IS("chars")) return sfmt(g, "yu_str_chars(%s)", s);
       if (IS("bytes")) return sfmt(g, "yu_str_bytes(%s)", s);
       if (IS("join")) return sfmt(g, "yu_str_join(%s, %s)", s, gen_expr(g, e->args.items[0]));
@@ -1543,10 +1564,10 @@ static const char *gen_module_call(G *g, Expr *e) {
   Ty *t = sub(g, e->ty);
   if (str_eq_c(mod, "http")) {
     if (str_eq_c(fnm, "serve") || str_eq_c(fnm, "serve_with")) {
-      const char *net = gen_expr(g, e->args.items[0]);
+      const char *net = gen_arg(g, e, 0);
       const char *port, *deadline, *workers;
       if (str_eq_c(fnm, "serve")) {
-        port = gen_expr(g, e->args.items[1]);
+        port = gen_arg(g, e, 1);
         deadline = "YU_HTTP_DEFAULT_DEADLINE_MS";
         workers = "0";
       } else {
@@ -1561,9 +1582,9 @@ static const char *gen_module_call(G *g, Expr *e) {
       emit(g, "yu_http_serve(%s, %s, %s, %s, %s);", net, port, hh, deadline, workers);
       return "YU_UNIT";
     }
-    if (str_eq_c(fnm, "response")) { const char *a0 = gen_expr(g, e->args.items[0]); const char *a1 = gen_expr(g, e->args.items[1]); return sfmt(g, "yu_http_response_text(%s, %s)", a0, a1); }
-    if (str_eq_c(fnm, "json")) { const char *a0 = gen_expr(g, e->args.items[0]); const char *a1 = gen_expr(g, e->args.items[1]); return sfmt(g, "yu_http_json(%s, %s)", a0, a1); }
-    if (str_eq_c(fnm, "request")) { const char *a0 = gen_expr(g, e->args.items[0]); const char *a1 = gen_expr(g, e->args.items[1]); const char *a2 = gen_expr(g, e->args.items[2]); return sfmt(g, "yu_http_request_make(%s, %s, %s)", a0, a1, a2); }
+    if (str_eq_c(fnm, "response")) { const char *a0 = gen_arg(g, e, 0); const char *a1 = gen_arg(g, e, 1); return sfmt(g, "yu_http_response_text(%s, %s)", a0, a1); }
+    if (str_eq_c(fnm, "json")) { const char *a0 = gen_arg(g, e, 0); const char *a1 = gen_arg(g, e, 1); return sfmt(g, "yu_http_json(%s, %s)", a0, a1); }
+    if (str_eq_c(fnm, "request")) { const char *a0 = gen_arg(g, e, 0); const char *a1 = gen_arg(g, e, 1); const char *a2 = gen_arg(g, e, 2); return sfmt(g, "yu_http_request_make(%s, %s, %s)", a0, a1, a2); }
   }
   if (str_eq_c(mod, "json")) {
     if (str_eq_c(fnm, "encode")) {
@@ -1663,6 +1684,7 @@ static const char *gen_call(G *g, Expr *e) {
       Decl *m = e->method;
       Ty *recv = sub(g, f->a->ty);
       const char *self = gen_value(g, f->a);
+      if (e->args.len) self = hoist(g, f->a, self);  // the receiver is evaluated before the arguments
       if (recv->args.len || m->generics.len) {
         // instance per receiver type arguments and method type arguments
         StrVec names = {0};

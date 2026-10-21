@@ -33,8 +33,11 @@ static int64_t current(yu_store *s) {
 #define ROUNDS 20000
 
 static void *hammer(void *arg) {
-  yu_arena_use(yu_arena_new());  // a worker allocates on its own arena
+  yu_arena *mine = yu_arena_new();  // a worker allocates on its own arena
+  yu_arena_use(mine);
   for (int i = 0; i < ROUNDS; i++) bump(arg);
+  yu_arena_use(NULL);  // released on exit, so LeakSanitizer (on by default on Linux) stays quiet
+  yu_arena_free(mine);
   return NULL;
 }
 

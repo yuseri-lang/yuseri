@@ -89,7 +89,7 @@ Every error is one line: `<ID> <file>:<line> <message>; <fix hint>`. A runtime e
 
 ## R-TIME: deadlines
 
-- **R-TIME-01** request <method> <path> exceeded its deadline (30 seconds unless `http.serve_with` sets another). The client gets `500` and the request's memory is freed. The position is the loop that was running when the deadline passed, and `called from` lists how it was reached; the message names the request. Fix: find the loop or call that never ends for this request; a longer deadline (`http.serve_with`) only helps when the work is legitimately slow.
+- **R-TIME-01** request <method> <path> exceeded its deadline (30 seconds unless `http.serve_with` sets another). The client gets `500` and the request's memory is freed. The position is the loop that was running when the deadline passed (`std.http` when none was; a loop that already ended is never named), and `called from` lists how it was reached; the message names the request. Fix: find the loop or call that never ends for this request; a longer deadline (`http.serve_with`) only helps when the work is legitimately slow.
 
 ## R-TASK: spawned tasks
 

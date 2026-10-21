@@ -155,7 +155,10 @@ extern _Thread_local const char *yu_cs[YU_CS_MAX];
 extern _Thread_local int yu_csd;
 #define yu_cs_push(loc) ((void)(yu_csd < YU_CS_MAX ? (yu_cs[yu_csd] = (loc)) : 0), yu_csd++)
 #define yu_cs_pop() ((void)yu_csd--)
-// The loop being run (set at every iteration): the position R-TIME-01 reports.
+// The loop being run: the position R-TIME-01 reports. Set at every iteration; the generated code
+// saves it before a loop and restores it after (a finished loop is never reported), and around
+// every call into user code (the callee may have returned from inside one of its loops). NULL
+// when no loop is running, which R-TIME-01 prints as `std.http`.
 extern _Thread_local const char *yu_loop_loc;
 #define yu_tick_at(loc) ((void)(yu_loop_loc = (loc)), yu_tick())
 

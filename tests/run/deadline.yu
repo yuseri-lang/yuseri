@@ -1,0 +1,68 @@
+// Deadline server (tests/deadline_http.sh): where R-TIME-01 points when the deadline passes
+// inside a loop, after a loop has ended, and after a call that returned from inside its loop.
+import std.http
+import std.json
+
+fn fib(n: Int) -> Int {
+  if n < 2 { n } else { fib(n - 1) + fib(n - 2) }
+}
+
+// Burns well past the deadline with no loop and no allocation, so no deadline check runs here.
+fn burn() -> Int { fib(35) }
+
+// Allocates thousands of times in one call: the first deadline check after the burn happens here.
+fn ticks() -> Int {
+  let items = "1,".repeat(20000)
+  match json.decode<List<Int>>("[{items}1]") {
+    Ok(xs) => xs.len()
+    Err(_) => 0
+  }
+}
+
+// Returns from inside its loop, so the loop position must be restored at the call site.
+fn first_above(xs: List<Int>, limit: Int) -> Int {
+  for x in xs {
+    if x > limit { return x }
+  }
+  0
+}
+
+fn handle(req: Request) -> Response {
+  match req.path {
+    "/in-loop" => {
+      var i = 0
+      while true {
+        i = i + 1
+      }
+      http.response(200, "{i}")
+    }
+    "/after-loop" => {
+      var n = 0
+      for i in 0..3 {
+        n = n + i
+      }
+      http.response(200, "{n + burn() + ticks()}")
+    }
+    "/after-call" => {
+      let x = first_above([1, 2, 3], 1)
+      http.response(200, "{x + burn() + ticks()}")
+    }
+    _ => http.response(404, "not found")
+  }
+}
+
+fn main(sys: System) -> Unit {
+  let opts = Serve { port: 8080, deadline_ms: 20, workers: None }
+  http.serve_with(sys.net, opts, fn(req: Request) -> Response { handle(req) })
+}
+
+test "first_above returns the first element above the limit" {
+  assert_eq(first_above([1, 2, 3], 1), 2)
+  assert_eq(first_above([1, 2, 3], 5), 0)
+}
+
+test "ticks decodes the list it builds" { assert_eq(ticks(), 20001) }
+
+test "a path outside the routes is 404" {
+  assert_eq(handle(http.request("GET", "/nope", "")).status, 404)
+}

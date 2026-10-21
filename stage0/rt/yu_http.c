@@ -240,6 +240,11 @@ void yu_http_handle_connection(yu_http_handler h, int fd, int64_t deadline_ms) {
     status = yu_http_read_request(fd, &req);
     if (status == 0) {
       req.f_id = dup_str(yu_request_id);
+      yu_sb line = {0};
+      yu_sb_str(&line, req.f_method);
+      yu_sb_cstr(&line, " ");
+      yu_sb_str(&line, req.f_path);
+      yu_request_line = yu_sb_finish(&line);
       res = h.fn(h.env, req);
     }
     yu_catch_end();
@@ -267,6 +272,7 @@ void yu_http_handle_connection(yu_http_handler h, int fd, int64_t deadline_ms) {
     yu_tasks_clear();
   }
   yu_request_id = yu_str_lit("main", 4);
+  yu_request_line = yu_str_lit("", 0);
   yu_arena_release(mark);
 }
 

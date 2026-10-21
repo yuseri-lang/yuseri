@@ -141,6 +141,9 @@ extern _Thread_local bool yu_serving;
 // While a spawned task runs: the "file:line" of its spawn, pushed into a trace right after the
 // request id so an error inside the task still shows where it came from.
 extern _Thread_local const char *yu_task_loc;
+// Under http.serve: "<method> <path>" of the request being handled, so an error that has no
+// source location of its own (R-TIME-01) still says which request it was.
+extern _Thread_local yu_str yu_request_line;
 void yu_trace_add(yu_list *trace, const char *loc);
 
 // ---- tests and assertions

@@ -1,6 +1,6 @@
 # Yuseri Stage 0 compiler
 CC      ?= clang
-CFLAGS  ?= -std=c11 -Wall -Wextra -Werror -O1 -g
+CFLAGS  ?= -std=c11 -D_GNU_SOURCE -Wall -Wextra -Werror -O1 -g
 SRC     := $(wildcard stage0/src/*.c)
 OBJ     := $(patsubst stage0/src/%.c,build/%.o,$(SRC))
 BIN     := build/yuseri

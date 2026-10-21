@@ -21,14 +21,21 @@ After `import std.http` these types are used by their plain names (`Request`, no
 
 ## Routing
 
-There is no router. Match on `method` and `path` yourself. For a parameter, strip the prefix and parse the rest:
+There is no router. Match on `method` and `path` yourself: one `if` per route that `return`s, the `404` last. For a parameter, strip the prefix (and the suffix) with `slice` and parse the rest:
 ```
-if req.path.starts_with("/users/") {
-  let rest = req.path.slice(7, req.path.len())
-  match Int.parse(rest) {
-    Ok(id) if id > 0 => show_user(id)
-    _ => http.json(404, "\{\"error\":\"not found\"\}")
+fn route(req: Request) -> Response {
+  let m = req.method
+  let p = req.path
+  if m == "GET" && p.starts_with("/users/") {
+    return match Int.parse(p.slice(7, p.len())) {
+      Ok(id) if id > 0 => show_user(id)
+      _ => http.json(404, "\{\"error\":\"not found\"\}")
+    }
   }
+  if m == "POST" && p.starts_with("/orders/") && p.ends_with("/cancel") {
+    return cancel_order(p.slice(8, p.len() - 7))  // "/orders/12/cancel" -> "12"
+  }
+  http.response(404, "not found")
 }
 ```
 

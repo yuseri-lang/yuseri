@@ -1,0 +1,88 @@
+// The examples of skills/runtime.md 3 (main: PORT with a default, sys.log handed to the handler)
+// and skills/stdlib/http.md Routing (one `if` per route, prefix and suffix stripped with slice),
+// as written there, so the skills and the compiler cannot drift apart.
+import std.http
+
+fn show_user(id: Int) -> Response { http.response(200, "user {id}") }
+
+fn cancel_order(id: String) -> Response { http.response(200, "cancel {id}") }
+
+fn route(req: Request) -> Response {
+  let m = req.method
+  let p = req.path
+  if m == "GET" && p.starts_with("/users/") {
+    return match Int.parse(p.slice(7, p.len())) {
+      Ok(id) if id > 0 => show_user(id)
+      _ => http.json(404, "\{\"error\":\"not found\"\}")
+    }
+  }
+  if m == "POST" && p.starts_with("/orders/") && p.ends_with("/cancel") {
+    return cancel_order(p.slice(8, p.len() - 7))  // "/orders/12/cancel" -> "12"
+  }
+  http.response(404, "not found")
+}
+
+fn handle(req: Request, hits: Store<Int>, log: Log) -> Response {
+  let n = hits.update(fn(v: Int) -> Int { v + 1 })
+  let res = route(req)
+  log.info("{req.method} {req.path} -> {res.status} ({n})")
+  res
+}
+
+fn main(sys: System) -> Unit {
+  let port = Int.parse(sys.env.get("PORT").unwrap_or("8080")).unwrap_or(8080)
+  let hits = Store.new(0)
+  http.serve(
+    sys.net,
+    port,
+    fn(req: Request) -> Response { handle(req, hits, sys.log) },
+  )
+}
+
+// runtime.md 2: stores and capabilities as struct fields and return values
+struct App { hits: Store<Int>, log: Log }
+
+fn new_app(log: Log) -> App { App { hits: Store.new(0), log: log } }
+
+fn counter() -> Store<Int> { Store.new(0) }
+
+test "routing examples" {
+  let log = Log.capture()
+  let hits = Store.new(0)
+  assert_eq(
+    handle(http.request("GET", "/users/7", ""), hits, log).body,
+    "user 7",
+  )
+  assert_eq(handle(http.request("GET", "/users/0", ""), hits, log).status, 404)
+  assert_eq(
+    handle(http.request("GET", "/users/abc", ""), hits, log).status,
+    404,
+  )
+  assert_eq(
+    handle(http.request("POST", "/orders/12/cancel", ""), hits, log).body,
+    "cancel 12",
+  )
+  assert_eq(
+    handle(http.request("GET", "/orders/12/cancel", ""), hits, log).status,
+    404,
+  )
+  assert(log.lines()[0].ends_with("GET /users/7 -> 200 (1)"))
+  assert_eq(hits.get(), 5)
+}
+
+test "stores and capabilities in a struct and as a return value" {
+  let app = new_app(Log.capture())
+  app.log.info("hello")
+  assert(app.log.lines()[0].ends_with("info hello"))
+  assert_eq(counter().get(), 0)
+  assert_eq(app.hits.update(fn(v: Int) -> Int { v + 1 }), 1)
+}
+
+test "PORT with a default" {
+  var m = Map<String, String>()
+  m.set("PORT", "9090")
+  let env = Env.of(m)
+  assert_eq(Int.parse(env.get("PORT").unwrap_or("8080")).unwrap_or(8080), 9090)
+  let none = Env.of(Map<String, String>())
+  assert_eq(Int.parse(none.get("PORT").unwrap_or("8080")).unwrap_or(8080), 8080)
+}

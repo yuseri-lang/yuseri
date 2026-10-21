@@ -1367,11 +1367,11 @@ static const char *gen_builtin(G *g, Expr *e) {
           else emit(g, "%s %s = *(%s *)%s->value;", tt, cur, tt, st);
           if (IS("update")) {
             emit(g, "%s %s;", tt, nv);
-            emit(g, "if (yu_catch_begin()) { %s = %s.fn(%s.env, %s); yu_catch_end(); } else { yu_fail(\"R-STORE-01\", %s, \"update function panicked; value unchanged\"); }", nv, f, f, cur, loc(g, e->line));
+            emit(g, "if (yu_catch_begin()) { yu_cs_push(%s); %s = %s.fn(%s.env, %s); yu_cs_pop(); yu_catch_end(); } else { yu_fail(\"R-STORE-01\", %s, \"update function panicked; value unchanged\"); }", loc(g, e->line), nv, f, f, cur, loc(g, e->line));
           } else {
             res = newtmp(g);
             emit(g, "%s %s;", ctype(g, t), res);
-            emit(g, "if (yu_catch_begin()) { %s = %s.fn(%s.env, %s); yu_catch_end(); } else { yu_fail(\"R-STORE-01\", %s, \"update function panicked; value unchanged\"); }", res, f, f, cur, loc(g, e->line));
+            emit(g, "if (yu_catch_begin()) { yu_cs_push(%s); %s = %s.fn(%s.env, %s); yu_cs_pop(); yu_catch_end(); } else { yu_fail(\"R-STORE-01\", %s, \"update function panicked; value unchanged\"); }", loc(g, e->line), res, f, f, cur, loc(g, e->line));
             emit(g, "%s %s = %s.val;", tt, nv, res);
             emit(g, "if (%s.ok) {", res);
             g->indent++;
@@ -1600,6 +1600,16 @@ static const char *gen_module_call(G *g, Expr *e) {
   return "YU_UNIT";
 }
 
+// A call into user code: the call site is pushed on the shadow stack for the duration of the
+// call, so a runtime error inside names its callers. The arguments are already evaluated.
+static const char *gen_user_call(G *g, Expr *e, const char *call) {
+  const char *r = newtmp(g);
+  emit(g, "yu_cs_push(%s);", loc(g, e->line));
+  emit(g, "%s %s = %s;", ctype(g, sub(g, e->ty)), r, call);
+  emit(g, "yu_cs_pop();");
+  return r;
+}
+
 static const char *gen_call(G *g, Expr *e) {
   Expr *f = e->a;
   Ty *t = sub(g, e->ty);
@@ -1645,9 +1655,9 @@ static const char *gen_call(G *g, Expr *e) {
         for (int i = 0; i < e->type_args.len; i++) { Ty *b = sub(g, (Ty *)e->type_args.items[i]); VEC_PUSH(g->a, &binds, b); }
         const char *cname = sfmt(g, "%s_%s", fn_cname(g, d->name), mangle_binds(g, &binds));
         gen_fn_instance(g, d, NULL, &d->generics, &binds, cname);
-        return sfmt(g, "%s(%s)", cname, gen_args(g, e, NULL));
+        return gen_user_call(g, e, sfmt(g, "%s(%s)", cname, gen_args(g, e, NULL)));
       }
-      return sfmt(g, "%s(%s)", fn_cname(g, f->text), gen_args(g, e, NULL));
+      return gen_user_call(g, e, sfmt(g, "%s(%s)", fn_cname(g, f->text), gen_args(g, e, NULL)));
     }
     case CK_METHOD: {
       Decl *m = e->method;
@@ -1661,13 +1671,13 @@ static const char *gen_call(G *g, Expr *e) {
         for (int i = 0; i < m->generics.len; i++) { VEC_PUSH(g->a, &names, m->generics.items[i]); Ty *b = sub(g, (Ty *)e->type_args.items[i]); VEC_PUSH(g->a, &binds, b); }
         const char *cname = sfmt(g, "%s_%s", method_cname(g, recv->name, m->name), mangle_binds(g, &binds));
         gen_fn_instance(g, m, recv, &names, &binds, cname);
-        return sfmt(g, "%s(%s)", cname, gen_args(g, e, self));
+        return gen_user_call(g, e, sfmt(g, "%s(%s)", cname, gen_args(g, e, self)));
       }
-      return sfmt(g, "%s(%s)", method_cname(g, recv->name, m->name), gen_args(g, e, self));
+      return gen_user_call(g, e, sfmt(g, "%s(%s)", method_cname(g, recv->name, m->name), gen_args(g, e, self)));
     }
     case CK_VALUE: {
       const char *c = gen_temp(g, f);
-      return sfmt(g, "%s.fn(%s)", c, gen_args(g, e, sfmt(g, "%s.env", c)));
+      return gen_user_call(g, e, sfmt(g, "%s.fn(%s)", c, gen_args(g, e, sfmt(g, "%s.env", c))));
     }
     case CK_STATIC: {
       Str tn = f->a->text, fnm = f->text;
@@ -1771,7 +1781,7 @@ static void gen_stmts(G *g, Block *b) {
           const char *i = newtmp(g);
           emit(g, "for (int64_t %s = %s; %s < %s; %s++) {", i, lo, i, hi, i);
           g->indent++;
-          emit(g, "yu_tick();");
+          emit(g, "yu_tick_at(%s);", loc(g, s->line));
           const char *cn = bind_new(g, s->name);
           emit(g, "int64_t %s = %s; (void)%s;", cn, i, cn);
         } else {
@@ -1779,7 +1789,7 @@ static void gen_stmts(G *g, Block *b) {
           const char *i = newtmp(g);
           emit(g, "for (int64_t %s = 0; %s < %s.len; %s++) {", i, i, l, i);
           g->indent++;
-          emit(g, "yu_tick();");
+          emit(g, "yu_tick_at(%s);", loc(g, s->line));
           const char *cn = bind_new(g, s->name);
           emit(g, "%s %s = ((%s *)%s.p)[%s]; (void)%s;", ctype(g, s->ty), cn, ctype(g, s->ty), l, i, cn);
         }
@@ -1792,7 +1802,7 @@ static void gen_stmts(G *g, Block *b) {
       case S_WHILE: {
         emit(g, "for (;;) {");
         g->indent++;
-        emit(g, "yu_tick();");
+        emit(g, "yu_tick_at(%s);", loc(g, s->line));
         const char *c = gen_expr(g, s->value);
         emit(g, "if (!(%s)) break;", c);
         gen_block_into(g, s->body, NULL, NULL);

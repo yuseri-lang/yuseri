@@ -1,4 +1,4 @@
-R-STORE-02 tests/run/store_nested.yu:6 update inside an update of the same Store; do not call update, set or get on a Store from inside its own update function
+R-STORE-02 tests/run/store_nested.yu:6 update inside an update of the same Store; called from tests/run/store_nested.yu:6; do not call update, set or get on a Store from inside its own update function
 R-STORE-01 tests/run/store_nested.yu:6 update function panicked; value unchanged; the update function panicked; the stored value is unchanged
 fail update inside an update of the same store fails with R-STORE-02
 ok   a store can be read inside another store's update

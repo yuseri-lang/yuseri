@@ -1,0 +1,15 @@
+R-INT-02 tests/run/callsite.yu:2 division by zero; called from tests/run/callsite.yu:4, tests/run/callsite.yu:6, tests/run/callsite.yu:10; test the divisor first and return `Err`
+fail a division inside a helper names its callers
+R-INT-02 tests/run/callsite.yu:16 division by zero; called from tests/run/callsite.yu:13, tests/run/callsite.yu:16; test the divisor first and return `Err`
+fail a call through a function value is a hop
+R-INT-02 tests/run/callsite.yu:19 division by zero; called from tests/run/callsite.yu:19, tests/run/callsite.yu:19, tests/run/callsite.yu:19, tests/run/callsite.yu:19, tests/run/callsite.yu:19, tests/run/callsite.yu:19, tests/run/callsite.yu:19, tests/run/callsite.yu:19, +13 more; test the divisor first and return `Err`
+fail deep recursion shows eight hops and counts the rest
+R-INT-02 tests/run/callsite.yu:26 division by zero; called from tests/run/callsite.yu:29; test the divisor first and return `Err`
+fail a method call is a hop
+R-INT-02 tests/run/callsite.yu:33 division by zero; called from tests/run/callsite.yu:33; test the divisor first and return `Err`
+R-STORE-01 tests/run/callsite.yu:33 update function panicked; value unchanged; the update function panicked; the stored value is unchanged
+fail the update function of a Store is a hop
+R-INT-02 tests/run/callsite.yu:2 division by zero; called from tests/run/callsite.yu:4, tests/run/callsite.yu:36; test the divisor first and return `Err`
+fail a failure in a later test starts from an empty stack
+ok   a test that passes after failures
+7 tests, 6 failed

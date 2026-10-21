@@ -216,14 +216,18 @@ static _Thread_local Task g_tasks[MAX_TASKS];
 static _Thread_local int g_ntasks = 0;
 
 static void run_task(Task t) {
-  const char *prev_loc = yu_task_loc;
+  const char *prev_loc = yu_task_loc, *prev_loop = yu_loop_loc;
+  int prev_csd = yu_csd;
   yu_task_loc = t.loc;
-  if (yu_catch_begin()) { t.fn(t.env); yu_catch_end(); }
-  else {
-    // the task's own error line is already printed; this one says which spawn it was
-    yu_fail("R-TASK-01", t.loc, "spawned task failed");
-  }
+  yu_csd = 0;
+  yu_loop_loc = NULL;
+  bool ok = false;
+  if (yu_catch_begin()) { t.fn(t.env); yu_catch_end(); ok = true; }
   yu_task_loc = prev_loc;
+  yu_loop_loc = prev_loop;
+  yu_csd = prev_csd;
+  // the task's own error line is already printed; this one says which spawn it was
+  if (!ok) yu_fail("R-TASK-01", t.loc, "spawned task failed");
 }
 
 void yu_tasks_spawn(yu_tasks *t, yu_task_fn fn, void *env, const char *loc) {

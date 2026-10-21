@@ -146,6 +146,19 @@ extern _Thread_local const char *yu_task_loc;
 extern _Thread_local yu_str yu_request_line;
 void yu_trace_add(yu_list *trace, const char *loc);
 
+// ---- call sites: a shadow stack of the "file:line" of every user function call in flight.
+// yu_fail prints it after the message ("; called from a:3, a:9"), nearest caller first, so a
+// runtime error inside a shared helper still says which path reached it. Past YU_CS_MAX only
+// the depth is counted. Catch frames save and restore the depth across an unwind.
+#define YU_CS_MAX 128
+extern _Thread_local const char *yu_cs[YU_CS_MAX];
+extern _Thread_local int yu_csd;
+#define yu_cs_push(loc) ((void)(yu_csd < YU_CS_MAX ? (yu_cs[yu_csd] = (loc)) : 0), yu_csd++)
+#define yu_cs_pop() ((void)yu_csd--)
+// The loop being run (set at every iteration): the position R-TIME-01 reports.
+extern _Thread_local const char *yu_loop_loc;
+#define yu_tick_at(loc) ((void)(yu_loop_loc = (loc)), yu_tick())
+
 // ---- tests and assertions
 void yu_assert(bool cond, const char *loc, const char *text);
 void yu_assert_eq_fail(const char *loc, yu_str left, yu_str right) __attribute__((noreturn));

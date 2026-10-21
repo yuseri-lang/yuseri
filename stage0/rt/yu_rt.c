@@ -171,7 +171,7 @@ void yu_deadline_check(void) {
   if (!g_deadline_at || yu_now_ms() <= g_deadline_at) return;
   int64_t len = g_deadline_len;
   g_deadline_at = 0;  // the failure path itself allocates; it must not fail again
-  yu_fail("R-TIME-01", "std.http", "request %.*s exceeded its %lld ms deadline", (int)yu_request_line.len, (const char *)yu_request_line.p, (long long)len);
+  yu_fail("R-TIME-01", yu_loop_loc ? yu_loop_loc : "std.http", "request %.*s exceeded its %lld ms deadline", (int)yu_request_line.len, (const char *)yu_request_line.p, (long long)len);
 }
 
 // ---- failures -------------------------------------------------------------
@@ -189,9 +189,10 @@ static const char *hint_for(const char *id) {
 }
 
 static _Thread_local jmp_buf g_catch[8];
+static _Thread_local int g_catch_csd[8];  // call-site depth when the frame was pushed
 static _Thread_local int g_ncatch = 0;
 
-void yu_catch_push(void) { if (g_ncatch < 8) g_ncatch++; }
+void yu_catch_push(void) { if (g_ncatch < 8) { g_catch_csd[g_ncatch] = yu_csd; g_ncatch++; } }
 jmp_buf *yu_catch_buf(void) { return &g_catch[g_ncatch - 1]; }
 void yu_catch_end(void) { if (g_ncatch > 0) g_ncatch--; }
 
@@ -201,11 +202,20 @@ void yu_fail(const char *id, const char *loc, const char *fmt, ...) {
   va_start(ap, fmt);
   vsnprintf(msg, sizeof msg, fmt, ap);
   va_end(ap);
+  // the call sites in flight, nearest first, at most 8; deeper ones are only counted
+  char chain[1024];
+  chain[0] = 0;
+  if (yu_csd > 0) {
+    size_t n = (size_t)snprintf(chain, sizeof chain, "; called from ");
+    int top = yu_csd < YU_CS_MAX ? yu_csd : YU_CS_MAX, shown = 0;
+    for (int i = top - 1; i >= 0 && shown < 8 && n < sizeof chain; i--, shown++) n += (size_t)snprintf(chain + n, sizeof chain - n, "%s%s", shown ? ", " : "", yu_cs[i]);
+    if (yu_csd > shown && n < sizeof chain) snprintf(chain + n, sizeof chain - n, ", +%d more", yu_csd - shown);
+  }
   // one fprintf call per line: lines from different workers never interleave
-  if (yu_serving) fprintf(stderr, "%.*s %s %s %s; %s\n", (int)yu_request_id.len, (const char *)yu_request_id.p, id, loc, msg, hint_for(id));
-  else fprintf(stderr, "%s %s %s; %s\n", id, loc, msg, hint_for(id));
+  if (yu_serving) fprintf(stderr, "%.*s %s %s %s%s; %s\n", (int)yu_request_id.len, (const char *)yu_request_id.p, id, loc, msg, chain, hint_for(id));
+  else fprintf(stderr, "%s %s %s%s; %s\n", id, loc, msg, chain, hint_for(id));
   release_all_held();
-  if (g_ncatch > 0) { int i = --g_ncatch; longjmp(g_catch[i], 1); }
+  if (g_ncatch > 0) { int i = --g_ncatch; yu_csd = g_catch_csd[i]; longjmp(g_catch[i], 1); }
   exit(1);
 }
 
@@ -513,6 +523,9 @@ _Thread_local yu_str yu_request_id = {(const uint8_t *)"main", 4};
 _Thread_local bool yu_serving = false;
 _Thread_local const char *yu_task_loc = NULL;
 _Thread_local yu_str yu_request_line = {(const uint8_t *)"", 0};
+_Thread_local const char *yu_cs[YU_CS_MAX];
+_Thread_local int yu_csd = 0;
+_Thread_local const char *yu_loop_loc = NULL;
 
 // Copies the list first: enum values are copied by value, and two copies must never
 // write into the same buffer (a trace must show only the path this value took).
@@ -544,6 +557,8 @@ void yu_assert_eq_fail(const char *loc, yu_str left, yu_str right) {
 int yu_test_run(const char *name, void (*fn)(void)) {
   g_tests++;
   yu_request_id = (yu_str){(const uint8_t *)name, (int64_t)strlen(name)};
+  yu_csd = 0;
+  yu_loop_loc = NULL;
   bool ok;
   if (yu_catch_begin()) { fn(); yu_catch_end(); ok = true; }
   else { ok = false; yu_arena_use(NULL); }

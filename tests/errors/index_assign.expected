@@ -1,0 +1,1 @@
+E-BIND-02 tests/errors/index_assign.yu:3 assignment to let xs; declare it with `var`

@@ -104,11 +104,12 @@ match load(id) {
 ```
 
 ## 15. List
-`List<T>`, ordered, growable on `var`. `List` and `Map` are values: assigning copies. `xs[i]` returns the element and fails with `R-LIST-01` out of range; `get(i)` returns `Option<T>` instead.
+`List<T>`, ordered, growable on `var`. `List` and `Map` are values: assigning copies. `xs[i]` returns the element and fails with `R-LIST-01` out of range; `get(i)` returns `Option<T>` instead. `xs[i] = v` replaces the element in place (needs `var`, same range check).
 ```
 var xs = List<Int>()
 xs.push(3)               // Unit; needs var
 let first = xs[0]
+xs[0] = 4                 // replace in place; needs var
 let maybe = xs.get(9)     // None
 let ys = [1, 2, 3]
 ```

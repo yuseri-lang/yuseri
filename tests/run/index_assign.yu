@@ -1,0 +1,20 @@
+// `xs[i] = v` replaces the element in place and is bounds-checked (core.md section 15).
+fn bump(xs: List<Int>) -> List<Int> {
+  var ys = xs
+  ys[0] = ys[0] + 1
+  ys
+}
+
+test "replace in place" {
+  var xs = [1, 2, 3]
+  xs[1] = 20
+  assert_eq(xs, [1, 20, 3])
+  assert_eq(bump(xs), [2, 20, 3])
+  assert_eq(xs[0], 1)
+}
+
+test "write out of range fails" {
+  var xs = [1]
+  xs[1] = 2
+  assert_eq(xs.len(), 1)
+}

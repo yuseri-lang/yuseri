@@ -1,0 +1,4 @@
+ok   replace in place
+R-LIST-01 tests/run/index_assign.yu:18 index out of range: index 1, len 1; use `get(i)` and handle `None`, or check `len()` first
+fail write out of range fails
+2 tests, 1 failed

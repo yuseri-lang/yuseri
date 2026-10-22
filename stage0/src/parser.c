@@ -27,7 +27,9 @@ static bool accept(P *p, TokKind k) {
 
 static void error_here(P *p, const char *what) {
   Token *t = cur(p);
-  if (t->kind == T_IDENT || t->kind == T_INT || t->kind == T_FLOAT)
+  if (t->kind == T_DOTDOT)
+    diag_error("E-SYN-01", p->file, t->line, "expected %s, got `..` (a range belongs only in `for i in a..b`)", what);
+  else if (t->kind == T_IDENT || t->kind == T_INT || t->kind == T_FLOAT)
     diag_error("E-SYN-01", p->file, t->line, "expected %s, got `%.*s`", what, t->text.len, t->text.p);
   else
     diag_error("E-SYN-01", p->file, t->line, "expected %s, got %s", what, tok_name(t->kind));
@@ -482,14 +484,9 @@ static Expr *parse_or(P *p) {
   return l;
 }
 
-static Expr *parse_expr(P *p) {
-  Expr *l = parse_or(p);
-  if (at(p, T_DOTDOT)) {
-    Token *t = advance(p);
-    l = binary(p, T_DOTDOT, l, parse_or(p), t->line);
-  }
-  return l;
-}
+// A range `a..b` is not an expression: only `for` reads it (parse_stmt), so `..`
+// anywhere else is E-SYN-01 (core.md section 9).
+static Expr *parse_expr(P *p) { return parse_or(p); }
 
 // ---- patterns ----------------------------------------------------------
 
@@ -572,7 +569,13 @@ static Stmt *parse_stmt(P *p) {
       s->name = ident(p);
       expect(p, T_IN, "`in`");
       p->no_struct++;
-      s->value = parse_expr(p);
+      Expr *lo = parse_expr(p);
+      if (at(p, T_DOTDOT)) {  // range a..b: allowed only here
+        Token *dd = advance(p);
+        s->value = binary(p, T_DOTDOT, lo, parse_expr(p), dd->line);
+      } else {
+        s->value = lo;
+      }
       p->no_struct--;
       s->body = parse_block(p);
       break;

@@ -1,0 +1,2 @@
+E-SYN-01 tests/errors/range.yu:3 expected newline or `}`, got `..` (a range belongs only in `for i in a..b`); compare the line with the example in the named section; remove semicolons, `return` outside a function, or trailing operators
+E-SYN-01 tests/errors/range.yu:4 expected newline or `}`, got `..` (a range belongs only in `for i in a..b`); compare the line with the example in the named section; remove semicolons, `return` outside a function, or trailing operators

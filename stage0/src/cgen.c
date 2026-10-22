@@ -779,13 +779,6 @@ static const char *gen_expr(G *g, Expr *e) {
         emit(g, "}");
         return r;
       }
-      if (op == T_DOTDOT) {
-        const char *r = newtmp(g);
-        const char *lo = gen_temp(g, e->a), *hi = gen_temp(g, e->b);
-        emit(g, "yu_list %s = yu_list_new(sizeof(int64_t));", r);
-        emit(g, "for (int64_t i_ = %s; i_ < %s; i_++) yu_list_push(&%s, &i_, sizeof(int64_t));", lo, hi, r);
-        return r;
-      }
       const char *l = hoist(g, e->a, gen_expr(g, e->a));  // left to right: `l` must not wait for what `r` emits
       const char *r = gen_expr(g, e->b);
       Ty *lt = sub(g, e->a->ty);

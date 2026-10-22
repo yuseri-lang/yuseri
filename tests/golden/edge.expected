@@ -30,5 +30,9 @@ fn in_loop() -> Int {
 fn upper_const() -> Bool { MAX < 200 && MAX > MAX - 1 }
 
 fn ranges(n: Int) -> List<Int> {
-  (0..n).filter(fn(i: Int) -> Bool { i % 2 == 0 })
+  var out = List<Int>()
+  for i in 0..n {
+    if i % 2 == 0 { out.push(i) }
+  }
+  out
 }

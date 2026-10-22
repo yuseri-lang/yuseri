@@ -1,0 +1,5 @@
+// `xs[i] = v` needs a `var` list (core.md section 15); a parameter is immutable.
+fn first_to_zero(xs: List<Int>) -> List<Int> {
+  xs[0] = 0
+  xs
+}

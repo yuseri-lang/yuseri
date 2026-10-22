@@ -1,0 +1,11 @@
+// A range `a..b` is only the iteration target of `for` (core.md section 9).
+fn evens(n: Int) -> Int {
+  let r = 0..n
+  return 0..n
+}
+
+fn count(n: Int) -> Int {
+  var total = 0
+  for i in 0..n { total = total + i }
+  total
+}

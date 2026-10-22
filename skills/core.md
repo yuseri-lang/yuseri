@@ -81,7 +81,7 @@ let u = find(1).unwrap_or(guest)   // find returns Option<User>
 ```
 
 ## 13. Result and `?`
-`Result<T, E>` is `Ok(value)` or `Err(error)`. `E` is an enum you define. `?` returns the `Err` from the current function, whose return type must be `Result` with the same `E`. `?` on `Option` returns `None`.
+`Result<T, E>` is `Ok(value)` or `Err(error)`. `E` is an enum you define, never `String` (`E-RES-03`). `?` returns the `Err` from the current function, whose return type must be `Result` with the same `E`. `?` on `Option` returns `None`.
 ```
 enum AppError { NotFound(id: Int), Invalid(field: String) }
 
@@ -93,7 +93,7 @@ fn load(id: Int) -> Result<User, AppError> {
 Methods: `is_ok()`, `unwrap_or(default)`. A value used as `E` carries a hidden trace: `Err(e)` and each `?` add a `file:line`. `e.trace()` returns `List<String>`: the request id, then the hops; empty if never wrapped. A `Result` that is not bound, passed, matched, or `?`-ed is compile error `E-RES-01`.
 
 ## 14. Pattern matching
-`match` must cover every case (`E-MATCH-01` otherwise). Arms are `pattern => expr` or `pattern => { block }` and all arms have the same type. `_` matches anything. `if` adds a guard.
+`match` must cover every case (`E-MATCH-01` otherwise). Arms are `pattern => expr` or `pattern => { block }` and all arms have the same type; `return` is a statement, so write `pattern => { return x }`. `_` matches anything. `if` adds a guard.
 ```
 match load(id) {
   Ok(u) if u.id > 0 => u.name

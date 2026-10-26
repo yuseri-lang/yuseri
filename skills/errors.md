@@ -12,7 +12,6 @@ Every error is one line: `<ID> <file>:<line> <message>; <fix hint>`. A runtime e
 
 - **E-NAME-01** unknown name. Not defined, not imported, or defined later in a block. Fix: define it, `import` its module, or check the spelling.
 - **E-NAME-02** duplicate definition in the same scope. Fix: rename one.
-- **E-NAME-03** item is not `pub`. You used something from another module that is private. Fix: add `pub` in its module.
 
 ## E-TYPE: types
 

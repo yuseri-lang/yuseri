@@ -6,7 +6,7 @@ Yuseri is a statically typed language for backend services. This file is the com
 One file = one module. Top-level declarations may appear in any order and refer to each other. An executable module has `fn main() -> Unit`, or `fn main(sys: System) -> Unit` when it touches the outside world (runtime.md); library and test modules have no `main`. Comments start with `//`. Keywords: `fn let var const if else for in while break continue return struct enum impl import pub match test true false`; anything else is free for names. A statement ends at the end of its line unless the line ends with `(`, `[`, `{`, `,`, a binary operator, or `=>`. The prelude (`Option`, `Result`, `List`, `Map`, `assert`, `panic`) needs no import.
 
 ## 2. Modules
-`import std.json` brings module `json` into scope; call `json.parse(s)`. Only `pub` items (`pub fn`, `pub struct`, ...) are visible outside their module.
+`import std.json` brings module `json` into scope; call `json.decode<T>(s)` and `json.encode(v)` (see `stdlib/json.md`). Only the standard library (`std.*`) can be imported: a program is one file.
 
 ## 3. Bindings
 `let` is immutable, `var` is mutable, `const` needs a type and a literal. `let` and `var` take no type annotation. An unused binding, parameter, or pattern name is compile error `E-BIND-01`; write `_` for values you drop.

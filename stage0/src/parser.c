@@ -29,6 +29,8 @@ static void error_here(P *p, const char *what) {
   Token *t = cur(p);
   if (t->kind == T_DOTDOT)
     diag_error("E-SYN-01", p->file, t->line, "expected %s, got `..` (a range belongs only in `for i in a..b`)", what);
+  else if (t->kind == T_PUB)
+    diag_error("E-SYN-01", p->file, t->line, "expected %s, got `pub` (a reserved word with no use: a program is one file; drop it)", what);
   else if (t->kind == T_IDENT || t->kind == T_INT || t->kind == T_FLOAT)
     diag_error("E-SYN-01", p->file, t->line, "expected %s, got `%.*s`", what, t->text.len, t->text.p);
   else
@@ -661,9 +663,8 @@ static void parse_field_list(P *p, ParamVec *out) {
   expect(p, T_RBRACE, "`}`");
 }
 
-static Decl *parse_fn_decl(P *p, bool pub) {
+static Decl *parse_fn_decl(P *p) {
   Decl *d = new_decl(p, D_FN, cur(p)->line);
-  d->pub = pub;
   expect(p, T_FN, "`fn`");
   d->name = ident(p);
   parse_generics(p, &d->generics);
@@ -676,10 +677,9 @@ static Decl *parse_fn_decl(P *p, bool pub) {
 
 static Decl *parse_decl(P *p) {
   Token *t = cur(p);
-  bool pub = accept(p, T_PUB);
   Decl *d = NULL;
   switch (kind(p)) {
-    case T_FN: d = parse_fn_decl(p, pub); return d;
+    case T_FN: d = parse_fn_decl(p); return d;
     case T_STRUCT: {
       d = new_decl(p, D_STRUCT, t->line);
       advance(p);
@@ -729,9 +729,8 @@ static Decl *parse_decl(P *p) {
       skip_newlines(p);
       while (!at(p, T_RBRACE) && !at(p, T_EOF)) {
         int before = p->i;
-        bool mpub = accept(p, T_PUB);
         if (at(p, T_FN)) {
-          Decl *m = parse_fn_decl(p, mpub);
+          Decl *m = parse_fn_decl(p);
           VEC_PUSH(p->a, &d->methods, m);
         } else {
           error_here(p, "`fn` inside impl");
@@ -777,7 +776,6 @@ static Decl *parse_decl(P *p) {
       sync(p);
       return NULL;
   }
-  d->pub = pub;
   d->end_line = prev_line(p);
   return d;
 }

@@ -1,0 +1,8 @@
+// `pub` is a reserved word with no use: a program is one file (core.md section 2).
+pub fn greet(name: String) -> String { "Hi {name}" }
+
+struct User { id: Int, name: String }
+
+impl User {
+  pub fn display(self) -> String { "{self.id}:{self.name}" }
+}

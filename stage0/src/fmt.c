@@ -551,7 +551,6 @@ static void render_signature(F *f, void *arg) {
 }
 
 static void fmt_fn_decl(F *f, Decl *d) {
-  if (d->pub) buf_puts(f->out, "pub ");
   buf_puts(f->out, "fn ");
   buf_str(f->out, d->name);
   fmt_generics(f, &d->generics);
@@ -595,7 +594,6 @@ static void render_fields(F *f, void *arg) {
 }
 
 static void fmt_struct_decl(F *f, Decl *d) {
-  if (d->pub) buf_puts(f->out, "pub ");
   buf_puts(f->out, "struct ");
   buf_str(f->out, d->name);
   fmt_generics(f, &d->generics);
@@ -639,7 +637,6 @@ static void render_variants(F *f, void *arg) {
 }
 
 static void fmt_enum_decl(F *f, Decl *d) {
-  if (d->pub) buf_puts(f->out, "pub ");
   buf_puts(f->out, "enum ");
   buf_str(f->out, d->name);
   fmt_generics(f, &d->generics);
@@ -710,7 +707,6 @@ static void fmt_decl(F *f, Decl *d) {
       fmt_block(f, d->body);
       break;
     case D_CONST:
-      if (d->pub) buf_puts(f->out, "pub ");
       buf_puts(f->out, "const ");
       buf_str(f->out, d->name);
       buf_puts(f->out, ": ");

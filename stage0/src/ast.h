@@ -170,7 +170,6 @@ typedef enum { D_FN, D_STRUCT, D_ENUM, D_IMPL, D_IMPORT, D_TEST, D_CONST } DeclK
 struct Decl {
   DeclKind kind;
   int line, end_line;
-  bool pub;
   Str name;             // fn/struct/enum/impl target/test name/const name
   StrVec generics;      // fn, struct, enum
   ParamVec params;      // fn params, struct fields

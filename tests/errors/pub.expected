@@ -1,0 +1,2 @@
+E-SYN-01 tests/errors/pub.yu:2 expected a declaration (`fn`, `struct`, `enum`, `impl`, `import`, `test`, `const`), got `pub` (a reserved word with no use: a program is one file; drop it); compare the line with the example in the named section; remove semicolons, `return` outside a function, or trailing operators
+E-SYN-01 tests/errors/pub.yu:7 expected `fn` inside impl, got `pub` (a reserved word with no use: a program is one file; drop it); compare the line with the example in the named section; remove semicolons, `return` outside a function, or trailing operators

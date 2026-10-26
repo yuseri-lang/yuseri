@@ -15,7 +15,7 @@ enum AppError { NotFound(id: Int), Invalid(field: String, reason: String) }
 
 const MAX_USERS: Int = 100
 
-pub fn greet(name: String) -> String { "Hi {name}" }
+fn greet(name: String) -> String { "Hi {name}" }
 
 fn load(id: Int) -> Result<User, AppError> {
   let u = find(id).ok_or(AppError.NotFound(id: id))?
@@ -72,7 +72,7 @@ fn handlers() -> Map<String, fn(Int) -> Int> {
 impl User {
   fn display(self) -> String { "{self.id}:{self.name}" }
 
-  pub fn rename(self, name: String) -> User { User { ..self, name: name } }
+  fn rename(self, name: String) -> User { User { ..self, name: name } }
 }
 
 test "greet works" { assert_eq(greet("Bo"), "Hi Bo") }

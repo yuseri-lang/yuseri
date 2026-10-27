@@ -21,7 +21,6 @@ X(E_RES_03, "E-RES-03", "define an enum for the error (`enum AppError { NotFound
 X(E_MATCH_01, "E-MATCH-01", "add an arm for each listed case, or a final `_ =>` arm")
 X(E_MATCH_02, "E-MATCH-02", "remove it or reorder")
 X(E_STR_01, "E-STR-01", "write `\\{` or `\\}`, or use `{expr}` for interpolation")
-X(E_FMT_01, "E-FMT-01", "run `yuseri fmt`")
 X(E_JSON_01, "E-JSON-01", "use structs, lists, Map<String, V>, Int, Float, Bool, String, Option and field-less enums only")
 X(E_STORE_01, "E-STORE-01", "keep only plain data in a Store: structs, lists, maps, Int, Float, Bool, String, Option and enums")
 X(E_CAP_01, "E-CAP-01", "pass capabilities as parameters or capture them; never put them in a Store or compare them")

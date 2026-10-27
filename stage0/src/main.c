@@ -7,8 +7,8 @@
 
 static int usage(void) {
   fprintf(stderr,
-          "usage: yuseri fmt [--write] <file.yu>...   print (or rewrite) in canonical layout\n"
-          "       yuseri check <file.yu>...           type-check and report every error; E-FMT-01 when not formatted\n"
+          "usage: yuseri fmt [--write|--check] <file.yu>...   print, rewrite, or check the canonical layout\n"
+          "       yuseri check <file.yu>...           type-check and report every error\n"
           "       yuseri parse <file.yu>...           parse only and report errors\n"
           "       yuseri build <file.yu> [-o <exe>]    compile to a native executable\n"
           "       yuseri run <file.yu>                 build and run main\n"
@@ -35,10 +35,25 @@ static bool format_file(const char *path, Buf *out, Str *original) {
   return ok;
 }
 
+// True when the source already has the canonical layout.
+static bool is_formatted(Str src, const Buf *out) {
+  return src.len == out->len && memcmp(src.p, out->p, (size_t)out->len) == 0;
+}
+
+// 1-based number of the first line where the source differs from the canonical layout.
+static int first_diff_line(Str src, const Buf *out) {
+  int line = 1, k = 0;
+  while (k < src.len && k < out->len && src.p[k] == out->p[k]) { if (src.p[k] == '\n') line++; k++; }
+  return line;
+}
+
+// `fmt` prints the canonical layout; `--write` rewrites the file in place;
+// `--check` prints nothing and only reports files that are not formatted (exit 1).
 static int cmd_fmt(int argc, char **argv) {
-  bool write = false;
+  bool write = false, check = false;
   int start = 0;
   if (argc > 0 && strcmp(argv[0], "--write") == 0) { write = true; start = 1; }
+  else if (argc > 0 && strcmp(argv[0], "--check") == 0) { check = true; start = 1; }
   if (start >= argc) return usage();
   int rc = 0;
   for (int i = start; i < argc; i++) {
@@ -46,10 +61,15 @@ static int cmd_fmt(int argc, char **argv) {
     Str orig;
     if (!format_file(argv[i], &out, &orig)) { rc = 1; buf_free(&out); continue; }
     if (write) {
-      if (!(orig.len == out.len && memcmp(orig.p, out.p, (size_t)out.len) == 0)) {
+      if (!is_formatted(orig, &out)) {
         FILE *fp = fopen(argv[i], "wb");
         if (!fp) { fprintf(stderr, "yuseri: cannot write %s\n", argv[i]); rc = 1; }
         else { fwrite(out.p, 1, (size_t)out.len, fp); fclose(fp); }
+      }
+    } else if (check) {
+      if (!is_formatted(orig, &out)) {
+        fprintf(stderr, "%s:%d is not formatted\n", argv[i], first_diff_line(orig, &out));
+        rc = 1;
       }
     } else {
       fwrite(out.p, 1, (size_t)out.len, stdout);
@@ -61,7 +81,7 @@ static int cmd_fmt(int argc, char **argv) {
 }
 
 // Lexes, parses and type-checks one file; errors are printed sorted by line.
-// The formatter check runs only when the file has no other error.
+// Layout is not checked here: that is `yuseri fmt --check`.
 static int cmd_check(int argc, char **argv) {
   if (argc == 0) return usage();
   int rc = 0;
@@ -77,17 +97,6 @@ static int cmd_check(int argc, char **argv) {
     int after_parse = diag_count();
     bool syntax_ok = after_parse == after_lex;
     if (syntax_ok) check_module(&a, m);
-    if (diag_count() == before) {
-      Buf out = {0};
-      fmt_module(m, &out);
-      if (!(src.len == out.len && memcmp(src.p, out.p, (size_t)out.len) == 0)) {
-        // report the first line that differs from the canonical layout
-        int line = 1, k = 0;
-        while (k < src.len && k < out.len && src.p[k] == out.p[k]) { if (src.p[k] == '\n') line++; k++; }
-        diag_error("E-FMT-01", argv[i], line, "file is not formatted; the layout differs from line %d", line);
-      }
-      buf_free(&out);
-    }
     diag_flush();
     diag_buffer(false);
     if (diag_count() != before) rc = 1;

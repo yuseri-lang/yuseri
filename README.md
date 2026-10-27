@@ -15,7 +15,9 @@ make
 make test
 ```
 
-`build/yuseri fmt <file.yu>` prints a file in canonical layout. `build/yuseri check <file.yu>` type-checks the file and prints every error as one line, `<ID> <file>:<line> <message>; <hint>`, sorted by line; each ID has an entry in `skills/errors.md`.
+`build/yuseri check <file.yu>` type-checks the file and prints every error as one line, `<ID> <file>:<line> <message>; <hint>`, sorted by line; each ID has an entry in `skills/errors.md`.
+
+`build/yuseri fmt <file.yu>` prints a file in canonical layout; `fmt --write` rewrites it in place and `fmt --check` reports `<file>:<line> is not formatted` (exit 1) when the layout differs. Layout is not part of the language: the skill never asks for `fmt`, and `check` does not look at it. The formatter is for humans, diffs and CI.
 
 `build/yuseri test <file.yu>` compiles the file to C (in `.yuseri/`), builds it with the C compiler and runs its `test` blocks; `build/yuseri run <file.yu>` runs `main`. Runtime errors use the same one-line format with `R-` ids.
 

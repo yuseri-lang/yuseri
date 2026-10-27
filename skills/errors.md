@@ -44,10 +44,6 @@ Every error is one line: `<ID> <file>:<line> <message>; <fix hint>`. A runtime e
 
 - **E-STR-01** bare `{` or `}` in a string literal. Fix: write `\{` or `\}`, or use `{expr}` for interpolation.
 
-## E-FMT: layout
-
-- **E-FMT-01** file is not formatted. Fix: run `yuseri fmt`.
-
 ## E-JSON: std.json
 
 - **E-JSON-01** type cannot be converted to or from JSON (an enum variant with fields, a `Map` with non-String keys, a function, or `Bytes`). Fix: use structs, lists, `Map<String, V>`, Int, Float, Bool, String, Option and field-less enums only.
